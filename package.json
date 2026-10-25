@@ -1,0 +1,38 @@
+{
+  "name": "automation-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Automation Studio: a local-first, extensible workflow automation platform.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "npm run dev -w @automation-studio/server",
+    "dev:web": "npm run dev -w @automation-studio/web",
+    "build": "npm run build -w @automation-studio/web && npm run build -w @automation-studio/server",
+    "start": "npm run start -w @automation-studio/server",
+    "worker": "npm run worker -w @automation-studio/server",
+    "migrate": "npm run migrate -w @automation-studio/server",
+    "seed": "npm run seed -w @automation-studio/server",
+    "mcp:stdio": "npm run mcp:stdio -w @automation-studio/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

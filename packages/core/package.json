@@ -1,0 +1,16 @@
+{
+  "name": "@automation-studio/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workflow schema, safe expressions, validation and planning shared by server and web.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

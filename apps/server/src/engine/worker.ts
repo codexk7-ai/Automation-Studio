@@ -52,6 +52,36 @@ export class Worker {
     }
   }
 
+  /**
+   * Serverless mode: processes due jobs until the queue is empty or `budgetMs`
+   * runs out. Jobs due within the budget (short delays, retries) are waited
+   * for; anything later is left for the next invocation or tick.
+   */
+  async drainFor(budgetMs: number): Promise<{ processed: number }> {
+    const deadline = Date.now() + budgetMs;
+    let processed = 0;
+    while (Date.now() < deadline) {
+      const jobs = await claimJobs(this.app.db, this.id, this.opts.concurrency);
+      if (!jobs.length) {
+        const next = await this.app.db.one<{ ms: number | null }>("SELECT (EXTRACT(EPOCH FROM (min(run_at) - now())) * 1000)::float8 AS ms FROM jobs WHERE status = 'pending'");
+        const waitMs = next?.ms === null || next?.ms === undefined ? null : Math.max(50, next.ms);
+        if (waitMs === null || Date.now() + waitMs > deadline - 1000) break;
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      await Promise.all(jobs.map((j) => this.handle(j)));
+      processed += jobs.length;
+    }
+    return { processed };
+  }
+
+  /** Serverless mode: fires due schedules/polls, runs maintenance when due, then drains. */
+  async tick(budgetMs: number): Promise<{ processed: number }> {
+    const started = Date.now();
+    await this.periodic(true);
+    return this.drainFor(Math.max(0, budgetMs - (Date.now() - started)));
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
       try {

@@ -34,14 +34,21 @@ export function need(req: FastifyRequest): Principal {
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const OWN_SECRET_PATHS = new Set(["/metrics", "/api/internal/tick"]);
 /** Paths owned by the API (everything else is the single-page app). */
 const isApiPath = (url: string) => /^\/(api|hooks)(\/|\?|$)/.test(url) || /^\/mcp(\/|\?|$)/.test(url);
 
-export async function buildServer(app: AppContext): Promise<FastifyInstance> {
+export interface ServerOptions {
+  /** Serverless deployments: runs due schedules and queued jobs within a time budget (see /api/internal/tick). */
+  tick?: (budgetMs: number) => Promise<{ processed: number }>;
+}
+
+export async function buildServer(app: AppContext, opts: ServerOptions = {}): Promise<FastifyInstance> {
   const server = Fastify({
     logger: false,
     bodyLimit: 2 * 1024 * 1024,
-    trustProxy: process.env.TRUST_PROXY === "true",
+    // Vercel's edge always sets X-Forwarded-For to the real client address.
+    trustProxy: process.env.TRUST_PROXY === "true" || !!process.env.VERCEL,
   });
 
   // Keep the raw body (webhook signature verification) and parse JSON ourselves.
@@ -91,8 +98,8 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
   // Authentication: bearer API token or session cookie (+ CSRF on unsafe methods).
   server.addHook("onRequest", async (req) => {
     const auth = req.headers.authorization;
-    // /metrics uses its own METRICS_TOKEN, not an API token.
-    if (auth?.startsWith("Bearer ") && req.url.split("?")[0] !== "/metrics") {
+    // /metrics and the queue tick use their own secrets, not API tokens.
+    if (auth?.startsWith("Bearer ") && !OWN_SECRET_PATHS.has(req.url.split("?")[0]!)) {
       const p = await principalFromApiToken(app, auth.slice(7).trim(), req.ip);
       if (!p) throw unauthorized("Invalid or expired API token.");
       req.principal = p;
@@ -129,6 +136,18 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
     const path = req.url.split("?")[0]!;
     if (path === "/api/health" || path === "/metrics") return;
     app.log[reply.statusCode >= 500 ? "error" : "info"]("request", { method: req.method, path: path.replace(/\/hooks\/w\/[^/]+/, "/hooks/w/:key"), status: reply.statusCode, ms: Math.round(ms), actor: req.principal?.tokenId ?? req.principal?.userId ?? null });
+  });
+
+  // Serverless queue tick (Vercel Cron / scheduled GitHub Action), only with CRON_SECRET.
+  server.get("/api/internal/tick", { config: { rateLimit: false } }, async (req, reply) => {
+    const secret = process.env.CRON_SECRET;
+    const given = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!opts.tick || !secret) return reply.status(404).send({ error: { code: "not_found", message: "Not found." } });
+    if (!given || !safeEqual(given, secret)) return reply.status(401).send({ error: { code: "unauthorized", message: "Invalid tick secret." } });
+    const budget = Math.max(1000, Number(process.env.TICK_BUDGET_MS ?? 45_000));
+    const started = Date.now();
+    const result = await opts.tick(budget);
+    return { ok: true, processed: result.processed, ms: Date.now() - started };
   });
 
   // Prometheus metrics, only with METRICS_TOKEN (Authorization: Bearer <token>).

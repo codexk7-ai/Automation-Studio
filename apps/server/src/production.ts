@@ -19,6 +19,7 @@ export function checkProductionConfig(config: AppConfig): { errors: string[]; wa
   if (config.allowRegistration) warnings.push("ALLOW_REGISTRATION is true: anyone who can reach the site can create an account. Set it to false once your accounts exist, or use SSO.");
   if (!process.env.METRICS_TOKEN) warnings.push("METRICS_TOKEN is not set: /metrics is disabled.");
   if (process.env.OUTBOUND_ALLOW_PRIVATE === "true") warnings.push("OUTBOUND_ALLOW_PRIVATE is ignored in production.");
+  if (process.env.VERCEL && !process.env.CRON_SECRET) warnings.push("CRON_SECRET is not set: /api/internal/tick is disabled, so schedules, delays and retries only advance when new work arrives.");
   if (process.env.ALLOW_UNSAFE_PRODUCTION_CONFIG === "true" && errors.length) {
     warnings.push(...errors.map((e) => `UNSAFE (allowed by ALLOW_UNSAFE_PRODUCTION_CONFIG): ${e}`));
     return { errors: [], warnings };

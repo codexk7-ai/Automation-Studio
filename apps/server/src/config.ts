@@ -59,6 +59,13 @@ export interface AppConfig {
   corsOrigins: string[];
 }
 
+/** On Vercel without PUBLIC_URL: the production domain, or the deployment URL for previews. */
+function vercelUrl(): string {
+  if (!process.env.VERCEL) return "";
+  const host = process.env.VERCEL_ENV === "production" ? process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL : process.env.VERCEL_URL;
+  return host ? `https://${host}` : "";
+}
+
 let cached: AppConfig | null = null;
 
 export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -72,7 +79,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     env,
     host: process.env.HOST || "127.0.0.1",
     port,
-    publicUrl: (process.env.PUBLIC_URL || `http://localhost:${port}`).replace(/\/$/, ""),
+    publicUrl: (process.env.PUBLIC_URL || vercelUrl() || `http://localhost:${port}`).replace(/\/$/, ""),
     databaseUrl: process.env.DATABASE_URL || "",
     pgliteDataDir: process.env.PGLITE_DATA_DIR || resolve(process.cwd(), ".data/pglite"),
     encryptionKey,

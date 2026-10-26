@@ -13,6 +13,8 @@ export interface Queryable {
 
 export interface Db extends Queryable {
   readonly driver: "pg" | "pglite";
+  /** The underlying node-postgres pool (pg driver only), e.g. for serverless pool management. */
+  readonly pool?: unknown;
   one<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | undefined>;
   transaction<T>(fn: (tx: Queryable) => Promise<T>): Promise<T>;
   /** Executes multiple statements without parameters (migrations only). */
@@ -34,9 +36,11 @@ async function createPgDb(url: string): Promise<Db> {
   // Return BIGINT/NUMERIC as JS numbers where safe (counts, ids).
   pg.default.types.setTypeParser(20, (v: string) => Number(v));
   pg.default.types.setTypeParser(1700, (v: string) => Number(v));
-  const pool = new Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_SIZE ?? 10) });
+  // Serverless instances are many and short-lived: keep each one's pool small.
+  const pool = new Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_SIZE ?? (process.env.VERCEL ? 3 : 10)) });
   const db: Db = {
     driver: "pg",
+    pool,
     async query<T>(sql: string, params?: unknown[]) {
       const res = await pool.query(sql, normalizeParams(params));
       return res.rows as T[];

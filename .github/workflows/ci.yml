@@ -18,6 +18,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Vercel build output
+        run: node scripts/vercel-build.mjs
       - name: End-to-end browser tests
         run: |
           npx playwright install --with-deps chromium

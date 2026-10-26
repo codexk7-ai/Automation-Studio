@@ -33,6 +33,10 @@ docker compose up -d --build
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for DNS, scaling, monitoring, backups and key rotation.
 
+### Vercel (serverless + Neon PostgreSQL)
+
+Import the GitHub repository in Vercel, add Neon from the Storage tab, and set `ENCRYPTION_KEY` and `CRON_SECRET`. The full guide, including how background work runs without a server, is in [docs/VERCEL.md](docs/VERCEL.md).
+
 ## What works locally without accounts
 
 | Area | Status |
@@ -62,6 +66,7 @@ See [FEATURE_MATRIX.md](FEATURE_MATRIX.md) for the full, honest status.
 | `npm run test:e2e` | Browser tests (Playwright; run `npx playwright install chromium` once) |
 | `npm run test:postgres` | Server suite against PostgreSQL (`TEST_DATABASE_URL`) |
 | `npm run test:ai-live` | Live AI tests against a local Ollama |
+| `npm run build:vercel` | Vercel Build Output in `.vercel/output` (see docs/VERCEL.md) |
 | `npm run rotate-key` | Re-encrypt stored secrets with `NEW_ENCRYPTION_KEY` |
 | `npm run typecheck` | TypeScript checks for all packages |
 | `npm run mcp:stdio` | MCP over stdio (`AUTOMATION_STUDIO_TOKEN` required) |
@@ -75,5 +80,6 @@ See [FEATURE_MATRIX.md](FEATURE_MATRIX.md) for the full, honest status.
 - [BUILD_STATUS.md](BUILD_STATUS.md): current state, test results, next steps
 - [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md): connector setup, prerequisites and costs
 - [docs/MCP.md](docs/MCP.md): connecting MCP clients and external servers
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): production deployment, scaling, monitoring, backups, key rotation
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): production deployment with Docker, scaling, monitoring, backups, key rotation
+- [docs/VERCEL.md](docs/VERCEL.md): deploying to Vercel with Neon
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): configuration, backup/restore, troubleshooting

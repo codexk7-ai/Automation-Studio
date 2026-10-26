@@ -18,6 +18,7 @@
     "dev:server": "npm run dev -w @automation-studio/server",
     "dev:web": "npm run dev -w @automation-studio/web",
     "build": "npm run build -w @automation-studio/web && npm run build -w @automation-studio/server",
+    "build:vercel": "npm run build && node scripts/vercel-build.mjs",
     "start": "npm run start -w @automation-studio/server",
     "worker": "npm run worker -w @automation-studio/server",
     "migrate": "npm run migrate -w @automation-studio/server",

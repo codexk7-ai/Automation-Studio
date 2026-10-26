@@ -86,7 +86,7 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
   server.get("/api/health", { config: { rateLimit: false } }, async (_req, reply) => {
     try {
       await app.db.query("SELECT 1");
-      return { status: "ok", database: app.db.driver, worker: app.config.workerMode, time: new Date().toISOString() };
+      return { status: "ok", database: app.db.driver, worker: process.env.VERCEL ? "serverless" : app.config.workerMode, time: new Date().toISOString() };
     } catch {
       return reply.status(503).send({ status: "error", database: "unreachable" });
     }

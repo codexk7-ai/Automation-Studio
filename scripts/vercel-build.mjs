@@ -73,6 +73,8 @@ const config = {
   routes: [
     { src: "^/assets/(.*)$", headers: { "cache-control": "public, max-age=31536000, immutable" }, continue: true },
     { src: "^/(.*)$", headers: securityHeaders, continue: true },
+    // The page itself ("/" is served from the filesystem, so the fallback route below never sees it).
+    { src: "^/(index\\.html)?$", headers: { "content-security-policy": csp, "cache-control": "no-cache" }, continue: true },
     // Server-owned paths go to the function (it sets its own headers and CSP).
     { src: "^/(api|hooks|mcp|metrics)(/.*)?$", dest: "/api" },
     { handle: "filesystem" },

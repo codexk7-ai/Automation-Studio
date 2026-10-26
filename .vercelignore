@@ -1,0 +1,14 @@
+# Never upload local secrets, data or build/test output when deploying from the CLI.
+.env
+.env.*
+!.env.example
+*.local.txt
+node_modules
+**/dist
+.data
+**/.data
+backups
+test-results
+playwright-report
+coverage
+.claude

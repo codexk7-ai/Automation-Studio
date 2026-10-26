@@ -89,7 +89,7 @@ Legend: **✅ Done** = implemented and covered by an automated test or verified 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Docker Compose stack: PostgreSQL, API, scalable workers, Caddy auto-HTTPS, nightly backups, optional Ollama | 🟡 | Written and reviewed; **not run here** (Docker daemon unavailable on the build machine) |
+| Docker Compose stack: PostgreSQL, API, scalable workers, Caddy auto-HTTPS, nightly backups, optional Ollama | ✅ | Run locally with `DOMAIN=localhost`: HTTPS + redirect, headers, `__Host-` cookie, `/metrics` blocked publicly, Playwright E2E 3/3 over HTTPS, 40 concurrent runs on 3 workers with no duplicates, backup restore drill. Real-domain ACME certificate not exercised |
 | Fail-fast production config checks | ✅ | `production.test.ts` |
 | Readiness (`/api/ready`) and Prometheus `/metrics` with bearer token | ✅ | Tested |
 | PostgreSQL-backed rate limits (per route, shared across instances) | ✅ | Tested, including per-route isolation |

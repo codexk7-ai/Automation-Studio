@@ -43,7 +43,7 @@ import { WorkflowsPage } from "./pages/workflows";
 import { Link, match, useRouter } from "./router";
 import { useSession } from "./session";
 import { CommandPalette, ThemeSwitch, useTheme, usePersistentFlag } from "./shell";
-import { Loading, useAsync } from "./ui";
+import { Loading, useAsync, usePolling } from "./ui";
 
 interface NavItem {
   to: string;
@@ -113,6 +113,7 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }) {
   useEffect(() => setMobileNav(false), [path]);
   const menuRef = useRef<HTMLDivElement>(null);
   const approvals = useAsync(() => get<unknown[]>("/api/approvals"), [me?.workspace.id, path]);
+  usePolling(approvals.reload, 15000);
   const pending = approvals.data?.length ?? 0;
   const current = activeItem(path);
 

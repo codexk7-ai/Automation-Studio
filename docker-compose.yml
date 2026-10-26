@@ -52,6 +52,9 @@ services:
   worker:
     <<: *app
     command: ["node", "dist/worker.js"]
+    # Workers serve no HTTP, so the image's /api/health check does not apply.
+    healthcheck:
+      disable: true
     # Scale horizontally: docker compose up -d --scale worker=3
     depends_on:
       api:
@@ -66,7 +69,8 @@ services:
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      # Caddy rejects an empty email; any address works for DOMAIN=localhost.
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -75,8 +79,9 @@ services:
   backup:
     image: postgres:17-alpine
     restart: unless-stopped
+    # Wait for the API so migrations have run before the first dump.
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}

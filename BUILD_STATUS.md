@@ -18,11 +18,17 @@ All 12 phases are implemented, plus a production-hardening pass and a redesigned
 - **External PostgreSQL:** a real wire-protocol server.
 - **Security:** TOTP RFC vectors, the 2FA flow, lockout across password and 2FA attempts, workspace 2FA requirement, per-record permissions, and OIDC SSO with a mock IdP (real RS256).
 - **Production:** fail-fast config, `/api/ready`, `/metrics` auth, `__Host-` cookie, per-route PostgreSQL rate limits, and key rotation through the real CLI.
+- **Docker production stack** (`DOMAIN=localhost`):
+  - Caddy HTTPS with an HTTP→HTTPS redirect, security headers and a `__Host-` Secure cookie; `/metrics` returns 404 publicly and requires the token internally
+  - Playwright E2E 3/3 over HTTPS against the containers
+  - 40 webhook runs across 3 workers, all succeeded with no duplicate executions
+  - backup restore drill matched the live database row for row
+- **Server suite on PostgreSQL 17** (Docker container): 40/40.
 - **UI redesign:** checked in a browser in light and dark themes, the editor, the command palette and the mobile drawer at 375px (no horizontal scroll).
 
 ### Not verified / known gaps
 
-- **`docker compose` + Caddy HTTPS were not run.** The Docker daemon would not start on this machine. Run them on your server (docs/DEPLOYMENT.md).
+- **A real-domain Let's Encrypt certificate** was not issued. Only Caddy's internal CA for `localhost` was used.
 - **The CI workflow** has not run on GitHub yet.
 - **Vendor services with real accounts were not exercised:** Anthropic, Google Sheets/YouTube, WhatsApp, HubSpot, Slack and a vendor OIDC IdP. They are tested against their documented API contracts with mock servers.
 - **No independent security review or penetration test.** See SECURITY.md for the limitations.
@@ -44,7 +50,7 @@ automation-studio/
 
 ## Next steps (in priority order)
 
-1. Deploy with `docker compose` on a server with a domain (docs/DEPLOYMENT.md) and test a backup restore.
+1. Deploy with `docker compose` on a server with a real domain (docs/DEPLOYMENT.md) and repeat the restore drill there.
 2. Push to GitHub so CI runs.
 3. Connect real vendor sandbox accounts (Google, WhatsApp, HubSpot, Slack, Anthropic, your OIDC IdP) and run each connector once.
 4. Commission an independent security review before handling sensitive customer data.

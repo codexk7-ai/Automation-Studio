@@ -5,7 +5,7 @@ import { get, post, qs } from "../api";
 import { iconFor } from "../editor/nodes";
 import { Link, useRouter } from "../router";
 import { nodeDef, useSession } from "../session";
-import { Button, Empty, ErrorBox, JsonView, Loading, Pagination, StatusBadge, errorMessage, formatDate, formatDuration, timeAgo, useAsync, useToast } from "../ui";
+import { Button, Empty, ErrorBox, JsonView, Loading, Pagination, StatusBadge, errorMessage, formatDate, formatDuration, timeAgo, useAsync, usePolling, useToast } from "../ui";
 
 interface ExecutionItem {
   id: string;
@@ -28,6 +28,7 @@ export function ExecutionsPage({ failedOnly }: { failedOnly?: boolean }) {
   useEffect(() => setStatus(failedOnly ? "failed" : ""), [failedOnly]);
   const workflows = useAsync(() => get<{ items: Array<{ id: string; name: string }> }>("/api/workflows?limit=200&status=all"));
   const list = useAsync(() => get<{ items: ExecutionItem[]; total: number; limit: number; offset: number }>(`/api/executions${qs({ status, workflowId, limit: 30, offset })}`), [status, workflowId, offset]);
+  usePolling(list.reload, 5000);
   // Live refresh while anything is in flight.
   useEffect(() => {
     if (!list.data?.items.some((i) => ["queued", "running"].includes(i.status))) return;

@@ -29,7 +29,7 @@ Add these values to `.env`:
 |---|---|
 | `DOMAIN` | Your DNS name. `PUBLIC_URL` becomes `https://$DOMAIN` |
 | `POSTGRES_PASSWORD` | A long random password |
-| `ACME_EMAIL` | Contact address for certificate expiry notices |
+| `ACME_EMAIL` | Contact address for certificate expiry notices (required; any address for a `localhost` trial) |
 | `METRICS_TOKEN` | Random string; enables `/metrics` for Prometheus |
 | `ALLOW_REGISTRATION` | `false` once your own account exists (or use SSO) |
 | `SMTP_*` | Optional, for real email delivery (otherwise mail stays in the outbox) |

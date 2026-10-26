@@ -170,7 +170,7 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
   if (existsSync(join(dist, "index.html"))) {
     await server.register(fastifyStatic, { root: dist, wildcard: false, index: false, maxAge: "1h" });
     server.setNotFoundHandler((req, reply) => {
-      if (req.method === "GET" && !isApiPath(req.url)) {
+      if ((req.method === "GET" || req.method === "HEAD") && !isApiPath(req.url)) {
         const file = req.url.split("?")[0]!;
         if (/\.[a-z0-9]+$/i.test(file) && existsSync(join(dist, file))) return reply.sendFile(file.slice(1));
         return reply.header("cache-control", "no-cache").sendFile("index.html");

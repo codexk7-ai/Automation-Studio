@@ -63,6 +63,19 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   return { ...state, reload, setData: (data: T) => setState({ data, loading: false }) };
 }
 
+/**
+ * Re-runs `reload` every `ms` while the tab is visible, so lists pick up work
+ * finished by background workers (which may run in other processes).
+ */
+export function usePolling(reload: () => unknown, ms: number) {
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") void reload();
+    }, ms);
+    return () => clearInterval(t);
+  }, [reload, ms]);
+}
+
 /** Runs an action with busy state and a toast on error. */
 export function useAction() {
   const toast = useToast();

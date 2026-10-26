@@ -3,7 +3,7 @@ import { Fragment, useState } from "react";
 import { get, post } from "../api";
 import { Link } from "../router";
 import { useSession } from "../session";
-import { Button, Empty, ErrorBox, JsonView, Loading, StatusBadge, errorMessage, formatDate, timeAgo, useAsync, useToast } from "../ui";
+import { Button, Empty, ErrorBox, JsonView, Loading, StatusBadge, errorMessage, formatDate, timeAgo, useAsync, usePolling, useToast } from "../ui";
 
 interface Approval {
   id: string;
@@ -24,6 +24,7 @@ export function ApprovalsPage() {
   const toast = useToast();
   const [status, setStatus] = useState("pending");
   const list = useAsync(() => get<Approval[]>(`/api/approvals?status=${status}`), [status]);
+  usePolling(list.reload, 5000);
   const [comments, setComments] = useState<Record<string, string>>({});
   const decide = async (a: Approval, decision: "approved" | "rejected") => {
     try {
@@ -110,6 +111,7 @@ interface OutboxItem {
 
 export function OutboxPage() {
   const list = useAsync(() => get<OutboxItem[]>("/api/outbox"));
+  usePolling(list.reload, 5000);
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className="page">

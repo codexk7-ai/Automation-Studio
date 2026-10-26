@@ -1,6 +1,6 @@
 import { toText } from "@automation-studio/core";
 import type { AppContext } from "../context.ts";
-import { StepError } from "../errors.ts";
+import { errorKindForStatus, StepError } from "../errors.ts";
 import { safeRequest } from "../security/ssrf.ts";
 import { apiCall } from "./http.ts";
 import type { IntegrationModule, LoadedCredential, NodeImplementation, StepContext } from "./types.ts";
@@ -306,6 +306,94 @@ const captions: NodeImplementation = {
   },
 };
 
+
+const MAX_UPLOAD_MB = Number(process.env.YOUTUBE_MAX_UPLOAD_MB) || 512;
+
+const uploadVideo: NodeImplementation = {
+  type: "youtube.upload_video",
+  integration: "google",
+  kind: "action",
+  name: "YouTube: upload video",
+  description: `Upload a video file from a URL with title, description, tags and privacy (resumable upload, max ${MAX_UPLOAD_MB} MB). Defaults to private; videos from unverified API projects are always private.`,
+  credentialType: "google",
+  credentialRequired: true,
+  sideEffects: "external",
+  minRole: "editor",
+  fields: [
+    { key: "sourceUrl", label: "Video file URL", type: "string", required: true, placeholder: "https://files.example.com/video.mp4", description: "Downloaded by the server (outbound network policy applies)." },
+    { key: "title", label: "Title", type: "string", required: true, description: "Max 100 characters." },
+    { key: "description", label: "Description", type: "text" },
+    { key: "tags", label: "Tags", type: "string_list" },
+    { key: "categoryId", label: "Category ID", type: "string", default: "22", description: "22 = People & Blogs, 27 = Education, 28 = Science & Technology." },
+    {
+      key: "privacyStatus",
+      label: "Privacy",
+      type: "select",
+      default: "private",
+      options: [
+        { value: "private", label: "Private" },
+        { value: "unlisted", label: "Unlisted" },
+        { value: "public", label: "Public" },
+      ],
+    },
+    { key: "publishAt", label: "Scheduled publish time (ISO, private only)", type: "string", placeholder: "{{ addDays(now(), 1) }}" },
+    { key: "madeForKids", label: "Made for kids (required declaration)", type: "boolean", default: false },
+    { key: "notifySubscribers", label: "Notify subscribers", type: "boolean", default: false },
+  ],
+  sampleOutput: { id: "abc123def45", url: "https://www.youtube.com/watch?v=abc123def45", uploadStatus: "uploaded", privacyStatus: "private", bytes: 1048576 },
+  mode: "live",
+  defaultTimeoutMs: 30 * 60_000,
+  async execute(ctx) {
+    const title = toText(ctx.config.title).trim();
+    if (!title || title.length > 100) throw new StepError("config", "Title is required (max 100 characters).");
+    const description = toText(ctx.config.description);
+    if (Buffer.byteLength(description) > 5000) throw new StepError("config", "Descriptions are limited to 5000 bytes.");
+    const privacyStatus = ["private", "unlisted", "public"].includes(String(ctx.config.privacyStatus)) ? String(ctx.config.privacyStatus) : "private";
+    const publishAt = ctx.config.publishAt ? new Date(toText(ctx.config.publishAt)) : null;
+    if (publishAt && (Number.isNaN(publishAt.getTime()) || privacyStatus !== "private")) throw new StepError("config", "Scheduled publishing needs a valid date and privacy 'private'.");
+    const auth = googleAuth(ctx.credential, true);
+
+    // 1. Download the source file (size-capped, SSRF-guarded).
+    const file = await safeRequest(ctx.app.fetch, toText(ctx.config.sourceUrl), { timeoutMs: 10 * 60_000, maxBytes: MAX_UPLOAD_MB * 1024 * 1024, signal: ctx.signal });
+    if (file.status >= 400) throw new StepError(file.status >= 500 ? "transient" : "permanent", `Could not download the video file (HTTP ${file.status}).`);
+    if (file.truncated) throw new StepError("permanent", `The video file is larger than ${MAX_UPLOAD_MB} MB (YOUTUBE_MAX_UPLOAD_MB).`);
+    if (!file.body.length) throw new StepError("permanent", "The video file is empty.");
+    const contentType = /^video\//.test(file.headers["content-type"] ?? "") ? file.headers["content-type"]! : "application/octet-stream";
+    ctx.log(`Downloaded ${file.body.length} bytes`);
+
+    // 2. Start a resumable upload session with the metadata.
+    const tags = Array.isArray(ctx.config.tags) ? (ctx.config.tags as unknown[]).map(toText).filter(Boolean) : undefined;
+    const metadata = {
+      snippet: { title, description, tags, categoryId: toText(ctx.config.categoryId) || "22" },
+      status: { privacyStatus, selfDeclaredMadeForKids: ctx.config.madeForKids === true, ...(publishAt ? { publishAt: publishAt.toISOString() } : {}) },
+    };
+    const init = await safeRequest(ctx.app.fetch, `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status&notifySubscribers=${ctx.config.notifySubscribers === true}`, {
+      method: "POST",
+      headers: { ...auth.headers, "content-type": "application/json; charset=UTF-8", "x-upload-content-length": String(file.body.length), "x-upload-content-type": contentType },
+      body: JSON.stringify(metadata),
+      signal: ctx.signal,
+    });
+    if (init.status >= 400) throw new StepError(errorKindForStatus(init.status), `YouTube upload could not start (HTTP ${init.status}): ${init.body.toString("utf8").slice(0, 300)}`);
+    const sessionUrl = init.headers.location;
+    if (!sessionUrl || new URL(sessionUrl).hostname !== "www.googleapis.com") throw new StepError("permanent", "YouTube did not return a valid upload session URL.");
+
+    // 3. Upload the bytes.
+    const put = await safeRequest(ctx.app.fetch, sessionUrl, {
+      method: "PUT",
+      headers: { ...auth.headers, "content-type": contentType, "content-length": String(file.body.length) },
+      body: new Uint8Array(file.body),
+      timeoutMs: 20 * 60_000,
+      signal: ctx.signal,
+    });
+    if (put.status >= 400) throw new StepError(errorKindForStatus(put.status), `YouTube upload failed (HTTP ${put.status}): ${put.body.toString("utf8").slice(0, 300)}`);
+    const video = JSON.parse(put.body.toString("utf8")) as { id: string; status?: { uploadStatus?: string; privacyStatus?: string } };
+    return { output: { id: video.id, url: `https://www.youtube.com/watch?v=${video.id}`, uploadStatus: video.status?.uploadStatus, privacyStatus: video.status?.privacyStatus, bytes: file.body.length } };
+  },
+  async mock(ctx) {
+    return { output: { id: "mockUpload1", url: "https://www.youtube.com/watch?v=mockUpload1", uploadStatus: "simulated", privacyStatus: toText(ctx.config.privacyStatus) || "private", title: ctx.config.title, _mock: true } };
+  },
+};
+
 const newVideoTrigger: NodeImplementation = {
   type: "trigger.youtube_new_video",
   integration: "google",
@@ -358,13 +446,14 @@ export const googleIntegration: IntegrationModule = {
       "A Google Cloud project with the Sheets API and/or YouTube Data API v3 enabled.",
       "For OAuth: an OAuth client (Web application) with redirect URI <PUBLIC_URL>/api/oauth/google/callback; set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server.",
       "Unverified OAuth apps are limited to test users; sensitive scopes may require Google verification.",
-      "YouTube quota: 10,000 units/day by default; uploads/updates cost more units. Higher quota requires an audit.",
+      "YouTube quota: 10,000 units/day by default; a video upload costs about 1,600 units and metadata updates about 50. Higher quota requires an audit.",
+      "Videos uploaded by unverified API projects are locked to private until the project passes Google's API audit.",
     ],
     availability: "live+mock",
     scopes: GOOGLE_SCOPES,
     rateLimits: "Sheets: 60 read & 60 write requests/minute/user by default. YouTube: daily unit quota.",
   },
-  nodes: [appendRow, readRows, getVideo, listVideos, updateVideo, captions, newVideoTrigger],
+  nodes: [appendRow, readRows, getVideo, listVideos, updateVideo, uploadVideo, captions, newVideoTrigger],
   credentialTypes: [
     {
       id: "google",

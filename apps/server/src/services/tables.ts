@@ -30,6 +30,8 @@ export interface DataTable {
   retention_days: number | null;
   min_read_role: Role;
   min_write_role: Role;
+  /** "own": members below admin only see and change rows they own. */
+  row_access: "all" | "own";
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +45,8 @@ export interface RowFilter {
 /** Who is writing a row: a user or a workflow execution (for loop protection). */
 export interface RowActor {
   userId?: string | null;
+  /** Explicit owner for record-level access (admins assigning records, forms). */
+  ownerId?: string | null;
   executionId?: string;
   workflowId?: string;
 }
@@ -155,6 +159,23 @@ export async function getTable(app: AppContext, workspaceId: string, id: string)
   return t;
 }
 
+/**
+ * Record-level access. Returns a SQL condition (and its parameter) restricting
+ * rows to the caller's own when the table uses row_access = 'own'. Workflows
+ * (p = null), admins and owners are unrestricted.
+ */
+function rowScope(p: Principal | null, t: DataTable): { sql: string; param: string } | null {
+  if (!p || t.row_access !== "own" || roleAtLeast(p.role, "admin")) return null;
+  return { sql: "owner_id = $", param: p.userId ?? "" };
+}
+
+async function assertRowAccess(app: AppContext, p: Principal | null, t: DataTable, rowId: string): Promise<void> {
+  const scope = rowScope(p, t);
+  if (!scope) return;
+  const row = await app.db.one("SELECT 1 FROM data_rows WHERE id = $1 AND table_id = $2 AND owner_id = $3", [rowId, t.id, scope.param]);
+  if (!row) throw notFound("Record");
+}
+
 function checkTableRole(p: Principal | null, t: DataTable, write: boolean): void {
   if (!p) return; // workflow executions run with workspace-level system access
   const needed = write ? t.min_write_role : t.min_read_role;
@@ -171,7 +192,7 @@ export async function listTables(app: AppContext, workspaceId: string): Promise<
 export async function createTable(
   app: AppContext,
   p: Principal,
-  input: { name: string; description?: string; columns: unknown; projectId?: string; retentionDays?: number | null; minReadRole?: Role; minWriteRole?: Role },
+  input: { name: string; description?: string; columns: unknown; projectId?: string; retentionDays?: number | null; minReadRole?: Role; minWriteRole?: Role; rowAccess?: "all" | "own" },
 ): Promise<DataTable> {
   authorize(p, "editor", "write");
   const name = toText(input.name).trim();
@@ -183,8 +204,8 @@ export async function createTable(
   if (!project) throw badRequest("Project not found.");
   const id = randomId("tbl");
   await app.db.query(
-    `INSERT INTO data_tables (id, workspace_id, project_id, name, description, columns, retention_days, min_read_role, min_write_role) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [id, p.workspaceId, project.id, name, toText(input.description).slice(0, 2000), columns, input.retentionDays ?? null, input.minReadRole ?? "viewer", input.minWriteRole ?? "editor"],
+    `INSERT INTO data_tables (id, workspace_id, project_id, name, description, columns, retention_days, min_read_role, min_write_role, row_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, p.workspaceId, project.id, name, toText(input.description).slice(0, 2000), columns, input.retentionDays ?? null, input.minReadRole ?? "viewer", input.minWriteRole ?? "editor", input.rowAccess === "own" ? "own" : "all"],
   );
   await audit(app, p, { workspaceId: p.workspaceId, action: "table.create", resourceType: "table", resourceId: id, details: { name }, ip: p.ip });
   return getTable(app, p.workspaceId, id);
@@ -194,13 +215,13 @@ export async function updateTable(
   app: AppContext,
   p: Principal,
   id: string,
-  input: { name?: string; description?: string; columns?: unknown; retentionDays?: number | null; minReadRole?: Role; minWriteRole?: Role },
+  input: { name?: string; description?: string; columns?: unknown; retentionDays?: number | null; minReadRole?: Role; minWriteRole?: Role; rowAccess?: "all" | "own" },
 ): Promise<DataTable> {
   authorize(p, "editor", "write");
   const t = await getTable(app, p.workspaceId, id);
   const columns = input.columns !== undefined ? normalizeColumns(input.columns) : t.columns;
   await app.db.query(
-    `UPDATE data_tables SET name = $3, description = $4, columns = $5, retention_days = $6, min_read_role = $7, min_write_role = $8, updated_at = now() WHERE id = $1 AND workspace_id = $2`,
+    `UPDATE data_tables SET name = $3, description = $4, columns = $5, retention_days = $6, min_read_role = $7, min_write_role = $8, row_access = $9, updated_at = now() WHERE id = $1 AND workspace_id = $2`,
     [
       id,
       p.workspaceId,
@@ -210,6 +231,7 @@ export async function updateTable(
       input.retentionDays === undefined ? t.retention_days : input.retentionDays,
       input.minReadRole ?? t.min_read_role,
       input.minWriteRole ?? t.min_write_role,
+      input.rowAccess === "own" || input.rowAccess === "all" ? input.rowAccess : t.row_access,
     ],
   );
   await audit(app, p, { workspaceId: p.workspaceId, action: "table.update", resourceType: "table", resourceId: id, ip: p.ip });
@@ -238,6 +260,11 @@ export async function queryRows(app: AppContext, p: Principal | null, workspaceI
   const colKeys = new Set(t.columns.map((c) => c.key));
   const params: unknown[] = [tableId];
   const where: string[] = ["table_id = $1"];
+  const scope = rowScope(p, t);
+  if (scope) {
+    params.push(scope.param);
+    where.push(`${scope.sql}${params.length}`);
+  }
   if (q.search) {
     params.push(`%${q.search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`);
     where.push(`data::text ILIKE $${params.length}`);
@@ -293,7 +320,7 @@ export async function queryRows(app: AppContext, p: Principal | null, workspaceI
   const [count] = await app.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM data_rows WHERE ${whereSql}`, countParams);
   params.push(limit, offset);
   const rows = await app.db.query<{ id: string; data: Record<string, unknown>; created_at: string; updated_at: string }>(
-    `SELECT id, data, created_at, updated_at FROM data_rows WHERE ${whereSql} ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    `SELECT id, data, owner_id, created_at, updated_at FROM data_rows WHERE ${whereSql} ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params,
   );
   return { table: t, rows, total: count?.n ?? 0, limit, offset };
@@ -321,7 +348,15 @@ export async function insertRow(app: AppContext, p: Principal | null, workspaceI
   const clean = validateRow(t.columns, data);
   await assertUnique(app, t, clean);
   const id = randomId("row");
-  await app.db.query("INSERT INTO data_rows (id, table_id, workspace_id, data, created_by) VALUES ($1, $2, $3, $4, $5)", [id, tableId, workspaceId, clean, actor.executionId ? `execution:${actor.executionId}` : (actor.userId ?? p?.userId ?? null)]);
+  const ownerId = actor.ownerId !== undefined ? actor.ownerId : actor.executionId ? null : (actor.userId ?? p?.userId ?? null);
+  await app.db.query("INSERT INTO data_rows (id, table_id, workspace_id, data, created_by, owner_id) VALUES ($1, $2, $3, $4, $5, $6)", [
+    id,
+    tableId,
+    workspaceId,
+    clean,
+    actor.executionId ? `execution:${actor.executionId}` : (actor.userId ?? p?.userId ?? null),
+    ownerId,
+  ]);
   const row = { id, data: clean };
   await emitEvent(app, workspaceId, "table.row.created", eventPayload(t, row, actor), { dedupeKey: `${id}:created` });
   return row;
@@ -330,6 +365,7 @@ export async function insertRow(app: AppContext, p: Principal | null, workspaceI
 export async function updateRow(app: AppContext, p: Principal | null, workspaceId: string, tableId: string, rowId: string, data: Record<string, unknown>, actor: RowActor = {}) {
   const t = await getTable(app, workspaceId, tableId);
   checkTableRole(p, t, true);
+  await assertRowAccess(app, p, t, rowId);
   const existing = await app.db.one<{ data: Record<string, unknown> }>("SELECT data FROM data_rows WHERE id = $1 AND table_id = $2", [rowId, tableId]);
   if (!existing) throw notFound("Record");
   const clean = validateRow(t.columns, data, true);
@@ -344,6 +380,7 @@ export async function updateRow(app: AppContext, p: Principal | null, workspaceI
 export async function deleteRow(app: AppContext, p: Principal | null, workspaceId: string, tableId: string, rowId: string, actor: RowActor = {}) {
   const t = await getTable(app, workspaceId, tableId);
   checkTableRole(p, t, true);
+  await assertRowAccess(app, p, t, rowId);
   const rows = await app.db.query<{ id: string; data: unknown }>("DELETE FROM data_rows WHERE id = $1 AND table_id = $2 RETURNING id, data", [rowId, tableId]);
   if (!rows.length) throw notFound("Record");
   await emitEvent(app, workspaceId, "table.row.deleted", eventPayload(t, rows[0]!, actor), { dedupeKey: `${rowId}:deleted` });
@@ -353,7 +390,8 @@ export async function deleteRow(app: AppContext, p: Principal | null, workspaceI
 export async function getRow(app: AppContext, p: Principal | null, workspaceId: string, tableId: string, rowId: string) {
   const t = await getTable(app, workspaceId, tableId);
   checkTableRole(p, t, false);
-  const row = await app.db.one("SELECT id, data, created_at, updated_at FROM data_rows WHERE id = $1 AND table_id = $2", [rowId, tableId]);
+  await assertRowAccess(app, p, t, rowId);
+  const row = await app.db.one("SELECT id, data, owner_id, created_at, updated_at FROM data_rows WHERE id = $1 AND table_id = $2", [rowId, tableId]);
   if (!row) throw notFound("Record");
   return row;
 }
@@ -408,4 +446,17 @@ export async function exportCsv(app: AppContext, p: Principal, tableId: string):
     all = all.concat(more.rows);
   }
   return { filename: `${table.name.replace(/[^a-z0-9]+/gi, "_")}.csv`, csv: toCsv(table.columns, all.map((r) => r.data)) };
+}
+
+/** Admins reassign record ownership (used with row_access = 'own'). */
+export async function assignRowOwner(app: AppContext, p: Principal, tableId: string, rowId: string, ownerId: string | null): Promise<void> {
+  authorize(p, "admin", "write");
+  const t = await getTable(app, p.workspaceId, tableId);
+  if (ownerId) {
+    const member = await app.db.one("SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2", [p.workspaceId, ownerId]);
+    if (!member) throw badRequest("The new owner must be a member of this workspace.");
+  }
+  const rows = await app.db.query("UPDATE data_rows SET owner_id = $3, updated_at = now() WHERE id = $1 AND table_id = $2 RETURNING id", [rowId, t.id, ownerId]);
+  if (!rows.length) throw notFound("Record");
+  await audit(app, p, { workspaceId: p.workspaceId, action: "table.row_owner", resourceType: "row", resourceId: rowId, details: { ownerId }, ip: p.ip });
 }

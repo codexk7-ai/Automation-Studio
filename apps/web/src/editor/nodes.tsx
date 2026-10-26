@@ -121,3 +121,5 @@ export function newNodeId(def: WorkflowDefinition, type: string): string {
   if (!ids.has(base)) return base;
   for (let i = 2; ; i++) if (!ids.has(`${base}${i}`)) return `${base}${i}`;
 }
+
+export { autoLayout } from "@automation-studio/core";

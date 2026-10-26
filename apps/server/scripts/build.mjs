@@ -17,6 +17,7 @@ await build({
     migrate: join(root, "src/cli/migrate.ts"),
     seed: join(root, "src/cli/seed.ts"),
     "mcp-stdio": join(root, "src/cli/mcp-stdio.ts"),
+    "rotate-key": join(root, "src/cli/rotate-key.ts"),
   },
   outdir: join(root, "dist"),
   bundle: true,

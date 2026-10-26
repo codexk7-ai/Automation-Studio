@@ -48,7 +48,7 @@ export function TemplatesPage() {
       ) : (
         <div className="grid grid-3">
           {items.map((t) => (
-            <div key={t.id} className="card tpl-card">
+            <div key={t.id} className="card hover tpl-card">
               <span className="badge violet" style={{ alignSelf: "flex-start" }}>
                 {t.category}
               </span>

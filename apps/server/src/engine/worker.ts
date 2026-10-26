@@ -125,6 +125,8 @@ export async function maintenance(app: AppContext): Promise<void> {
   await app.db.query("DELETE FROM jobs WHERE status = 'done' AND updated_at < now() - interval '1 day'");
   await app.db.query("DELETE FROM sessions WHERE expires_at < now()");
   await app.db.query("DELETE FROM oauth_states WHERE expires_at < now()");
+  await app.db.query("DELETE FROM oidc_states WHERE expires_at < now()");
+  await app.db.query("DELETE FROM rate_limits WHERE window_start < now() - interval '1 day'");
   await app.db.query("DELETE FROM trigger_events WHERE created_at < now() - interval '30 days'");
   // Approval timeouts: expire and let the runner resolve the waiting step.
   const expired = await app.db.query<{ execution_id: string }>("UPDATE approvals SET status = 'expired' WHERE status = 'pending' AND expires_at < now() RETURNING execution_id");

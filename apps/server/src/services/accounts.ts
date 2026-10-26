@@ -43,8 +43,8 @@ export async function registerUser(app: AppContext, input: { email: string; name
 
 export async function authenticate(app: AppContext, emailInput: string, password: string, ip?: string): Promise<UserRow> {
   const email = String(emailInput ?? "").trim().toLowerCase();
-  const user = await app.db.one<UserRow & { password_hash: string; is_active: boolean; failed_logins: number; locked_until: string | null }>(
-    "SELECT id, email, name, password_hash, is_active, failed_logins, locked_until FROM users WHERE lower(email) = $1",
+  const user = await app.db.one<UserRow & { password_hash: string; is_active: boolean; failed_logins: number; locked_until: string | null; totp_enabled: boolean }>(
+    "SELECT id, email, name, password_hash, is_active, failed_logins, locked_until, totp_enabled FROM users WHERE lower(email) = $1",
     [email],
   );
   // Constant-ish work for unknown users to reduce account enumeration via timing.
@@ -60,7 +60,9 @@ export async function authenticate(app: AppContext, emailInput: string, password
     await audit(app, { actorType: "system" }, { workspaceId: null, action: "auth.login_failed", resourceType: "user", resourceId: user.id, ip });
     throw unauthorized("Invalid email or password.");
   }
-  await app.db.query("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1", [user.id]);
+  // With 2FA on, the counter only resets after the second factor succeeds (see mfa.ts),
+  // so a known password cannot be used to keep retrying codes.
+  if (!user.totp_enabled) await app.db.query("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1", [user.id]);
   return { id: user.id, email: user.email, name: user.name };
 }
 

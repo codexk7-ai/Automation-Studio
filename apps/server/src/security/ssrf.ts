@@ -176,7 +176,11 @@ function requestOnce(url: URL, method: string, headers: Record<string, string>, 
       url,
       {
         method,
-        headers: { "user-agent": "AutomationStudio/0.1", ...headers },
+        headers: {
+          "user-agent": "AutomationStudio/0.1",
+          ...(body !== undefined && body !== null && method !== "GET" && method !== "HEAD" && !Object.keys(headers).some((k) => k.toLowerCase() === "content-length") ? { "content-length": String(Buffer.byteLength(body)) } : {}),
+          ...headers,
+        },
         lookup: guardedLookup(url, policy),
         signal,
       },

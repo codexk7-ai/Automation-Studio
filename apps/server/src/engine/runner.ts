@@ -294,7 +294,7 @@ async function executeStep(app: AppContext, exec: ExecutionRow, node: WorkflowNo
     const built = await buildStepContext(app, exec, node, { ...step, attempt }, steps, depth, controller.signal);
     const { ctx, impl } = built;
     logs = built.logs;
-    knownSecrets = ctx.credential ? secretValues(ctx.credential.data) : [];
+    knownSecrets = ctx.credential ? secretValues(ctx.credential.data, ctx.app.registry.getCredentialType(ctx.credential.type)?.fields) : [];
     inputForRecord = redactInput(impl.fields, ctx.config, knownSecrets);
 
     const simulate = impl.mode === "mock" || (exec.use_mocks && impl.sideEffects === "external" && !!impl.mock) || (!ctx.credential && impl.credentialRequired && exec.use_mocks && !!impl.mock);

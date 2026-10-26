@@ -8,11 +8,29 @@ import { createWorkflow, publishWorkflow } from "../src/services/workflows.ts";
 
 export const TEST_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+/**
+ * With TEST_DATABASE_URL set (npm run test:postgres), each test app runs on a
+ * real PostgreSQL server in its own fresh schema; otherwise in-memory PGlite.
+ */
+async function isolatedDatabaseUrl(): Promise<string> {
+  const base = process.env.TEST_DATABASE_URL;
+  if (!base) return "";
+  const schema = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: base });
+  await client.connect();
+  await client.query(`CREATE SCHEMA ${schema}`);
+  await client.end();
+  const url = new URL(base);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  return url.toString();
+}
+
 export async function testApp(extraAllowlist: string[] = []): Promise<App> {
   return createApp({
     env: "test",
     pgliteDataDir: "memory://",
-    databaseUrl: "",
+    databaseUrl: await isolatedDatabaseUrl(),
     encryptionKey: TEST_KEY,
     logLevel: "silent",
     workerMode: "off",

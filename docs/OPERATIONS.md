@@ -4,6 +4,27 @@
 
 All settings are environment variables. See `.env.example`, which documents each one. Required: `ENCRYPTION_KEY`, a 64-character hex string that `npm run setup` generates. In production you also need `NODE_ENV=production`, `PUBLIC_URL` (https), `SECURE_COOKIES=true`, `ALLOW_REGISTRATION=false` once accounts exist, and PostgreSQL through `DATABASE_URL`.
 
+## Single sign-on (OpenID Connect)
+
+1. In your identity provider, register a web application with redirect URI `<PUBLIC_URL>/api/auth/sso/callback` and the scopes `openid email profile`.
+2. Set `OIDC_ISSUER` (the issuer URL whose `/.well-known/openid-configuration` is published), `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, then restart. The sign-in page shows an SSO button.
+3. Choose an account policy:
+   - **Default:** users must already exist (an admin adds them under Team). Their first SSO sign-in links the identity by verified email.
+   - `OIDC_AUTO_CREATE_USERS=true` creates an account and workspace for new users.
+   - Restrict sign-ins with `OIDC_ALLOWED_DOMAINS=yourcompany.com`.
+4. Security: authorization code with PKCE; single-use state and nonce; ID-token signature verified against the provider's JWKS (RS256/384/512, PS256, ES256/384), plus issuer, audience, expiry and nonce checks. Unverified emails are rejected. If your IdP runs on a private network, add its `host:port` to `OUTBOUND_ALLOWLIST`.
+5. SSO users authenticate at the IdP, so enforce MFA there. The workspace "require two-factor" policy applies to password sign-ins and also prompts SSO users to enroll a TOTP app.
+
+## Two-factor authentication
+
+Users turn on TOTP under **Settings → Two-factor authentication**: scan the QR code, confirm a code, and save the 10 single-use recovery codes. Admins can require 2FA for every member of a workspace (Settings → Workspace); members are then blocked from everything except enrollment until they set it up. Secrets are encrypted with `ENCRYPTION_KEY`, codes cannot be reused, and recovery codes are stored hashed.
+
+To recover a user who lost both their device and their recovery codes, an operator can run:
+
+```sql
+UPDATE users SET totp_enabled = false, totp_secret = NULL, recovery_codes = '[]' WHERE lower(email) = 'user@example.com';
+```
+
 ## Health and monitoring
 
 - `GET /api/health`: database connectivity, driver and worker mode. Returns 503 when the database is unreachable. Used by the Docker HEALTHCHECK.

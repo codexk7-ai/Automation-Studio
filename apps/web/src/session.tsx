@@ -10,6 +10,9 @@ export interface Me {
   projects: Array<{ id: string; name: string }>;
   csrfToken: string | null;
   brandName: string;
+  totpEnabled: boolean;
+  recoveryCodesLeft: number;
+  require2fa: boolean;
 }
 
 export interface Catalog {
@@ -41,7 +44,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setCsrf(m.csrfToken);
       setMe(m);
       document.title = m.brandName;
-      setCatalog(await get<Catalog>("/api/catalog"));
+      // The catalog can be unavailable (e.g. 2FA enrollment gate) without ending the session.
+      setCatalog(await get<Catalog>("/api/catalog").catch(() => null));
     } catch {
       setMe(null);
       setCsrf(null);

@@ -1,5 +1,5 @@
 import { FUNCTION_NAMES, CONDITION_OPERATORS, redact, ROLES, type Role } from "@automation-studio/core";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { badRequest, unauthorized } from "../errors.ts";
 import { queueStats } from "../engine/queue.ts";
@@ -22,10 +22,12 @@ import {
   updateMemberRole,
 } from "../services/accounts.ts";
 import { audit, listAudit } from "../services/audit.ts";
+import { beginTotpSetup, completeMfaChallenge, confirmTotpSetup, disableTotp, issueMfaChallenge, mfaStatus } from "../services/mfa.ts";
+import { finishSso, startSso } from "../services/sso.ts";
 import { createCredential, deleteCredential, listCredentials, testCredential, updateCredential } from "../services/credentials.ts";
 import { cancelExecution, decideApproval, getExecution, listApprovals, listExecutions, retryExecution } from "../services/executions.ts";
 import { createForm, deleteForm, getForm, listForms, updateForm } from "../services/forms.ts";
-import { createTable, deleteRow, deleteTable, exportCsv, getTable, importCsv, insertRow, listTables, queryRows, updateRow, updateTable, type RowFilter } from "../services/tables.ts";
+import { assignRowOwner, createTable, deleteRow, deleteTable, exportCsv, getTable, importCsv, insertRow, listTables, queryRows, updateRow, updateTable, type RowFilter } from "../services/tables.ts";
 import { instantiateTemplate, listTemplates } from "../services/templates.ts";
 import {
   createWorkflow,
@@ -46,7 +48,7 @@ import {
   testNode,
   validateDefinition,
 } from "../services/workflows.ts";
-import { need, SESSION_COOKIE } from "./server.ts";
+import { need, sessionCookieName } from "./server.ts";
 import { startOAuth, finishOAuth } from "./oauth.ts";
 
 type Body = Record<string, unknown>;
@@ -71,6 +73,16 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
   const authLimit = { config: { rateLimit: { max: app.config.authRateLimitPerMinute, timeWindow: "1 minute", keyGenerator: (req: FastifyRequest) => req.ip } } };
 
   // ---------------------------------------------------------------- health
+  // Readiness: database reachable and all migrations applied (use for load balancers).
+  server.get("/api/ready", { config: { rateLimit: false } }, async (_req, reply) => {
+    try {
+      const applied = await app.db.one<{ n: number }>("SELECT count(*)::int AS n FROM schema_migrations");
+      return { status: "ready", migrations: applied?.n ?? 0 };
+    } catch {
+      return reply.status(503).send({ status: "not_ready" });
+    }
+  });
+
   server.get("/api/health", { config: { rateLimit: false } }, async (_req, reply) => {
     try {
       await app.db.query("SELECT 1");
@@ -89,24 +101,74 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     const b = body(req);
     const { user, workspaceId } = await registerUser(app, { email: str(b.email) ?? "", name: str(b.name) ?? "", password: str(b.password) ?? "", workspaceName: str(b.workspaceName) });
     const s = await createSession(app, user.id, workspaceId, { ip: req.ip, userAgent: req.headers["user-agent"] });
-    reply.setCookie(SESSION_COOKIE, s.token, { httpOnly: true, sameSite: "lax", secure: app.config.secureCookies, path: "/", expires: s.expires });
+    reply.setCookie(sessionCookieName(app.config), s.token, { httpOnly: true, sameSite: "lax", secure: app.config.secureCookies, path: "/", expires: s.expires });
     return { user, workspaceId, csrfToken: s.csrf };
   });
 
   server.post("/api/auth/login", authLimit, async (req, reply) => {
     const b = body(req);
     const user = await authenticate(app, str(b.email) ?? "", str(b.password) ?? "", req.ip);
+    if ((await mfaStatus(app, user.id)).enabled) return { mfaRequired: true, mfaToken: issueMfaChallenge(app, user.id) };
     const ws = await app.db.one<{ workspace_id: string }>("SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY created_at LIMIT 1", [user.id]);
     const s = await createSession(app, user.id, ws?.workspace_id ?? null, { ip: req.ip, userAgent: req.headers["user-agent"] });
-    reply.setCookie(SESSION_COOKIE, s.token, { httpOnly: true, sameSite: "lax", secure: app.config.secureCookies, path: "/", expires: s.expires });
+    reply.setCookie(sessionCookieName(app.config), s.token, { httpOnly: true, sameSite: "lax", secure: app.config.secureCookies, path: "/", expires: s.expires });
     await audit(app, { actorType: "user", userId: user.id, workspaceId: ws?.workspace_id ?? "", role: "viewer" }, { workspaceId: ws?.workspace_id ?? null, action: "auth.login", resourceType: "user", resourceId: user.id, ip: req.ip });
     return { user, csrfToken: s.csrf };
   });
 
+  const startSession = async (req: FastifyRequest, reply: FastifyReply, userId: string) => {
+    const ws = await app.db.one<{ workspace_id: string }>("SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY created_at LIMIT 1", [userId]);
+    const s = await createSession(app, userId, ws?.workspace_id ?? null, { ip: req.ip, userAgent: req.headers["user-agent"] });
+    reply.setCookie(sessionCookieName(app.config), s.token, { httpOnly: true, sameSite: "lax", secure: app.config.secureCookies, path: "/", expires: s.expires });
+    await audit(app, { actorType: "user", userId, workspaceId: ws?.workspace_id ?? "", role: "viewer" }, { workspaceId: ws?.workspace_id ?? null, action: "auth.login", resourceType: "user", resourceId: userId, ip: req.ip });
+    return s;
+  };
+
+  server.post("/api/auth/login/mfa", authLimit, async (req, reply) => {
+    const b = body(req);
+    const userId = await completeMfaChallenge(app, str(b.mfaToken) ?? "", str(b.code) ?? "");
+    const user = await app.db.one("SELECT id, email, name FROM users WHERE id = $1", [userId]);
+    const s = await startSession(req, reply, userId);
+    return { user, csrfToken: s.csrf };
+  });
+
+  server.get("/api/auth/2fa", async (req) => mfaStatus(app, need(req).userId!));
+  server.post("/api/auth/2fa/setup", async (req) => {
+    const p = need(req);
+    if (p.actorType !== "user") throw unauthorized("Session required.");
+    return beginTotpSetup(app, p.userId!);
+  });
+  server.post("/api/auth/2fa/confirm", authLimit, async (req) => {
+    const p = need(req);
+    if (p.actorType !== "user") throw unauthorized("Session required.");
+    return confirmTotpSetup(app, p.userId!, str(body(req).code) ?? "");
+  });
+  server.post("/api/auth/2fa/disable", authLimit, async (req) => {
+    const p = need(req);
+    if (p.actorType !== "user") throw unauthorized("Session required.");
+    const ws = await app.db.one<{ settings: { require2fa?: boolean } }>("SELECT settings FROM workspaces WHERE id = $1", [p.workspaceId]);
+    if (ws?.settings?.require2fa) throw badRequest("This workspace requires two-factor authentication.");
+    await disableTotp(app, p.userId!, str(body(req).password) ?? "", str(body(req).code) ?? "");
+    return { ok: true };
+  });
+
+  server.get("/api/auth/sso/start", authLimit, async (_req, reply) => reply.redirect(await startSso(app)));
+  server.get("/api/auth/sso/callback", authLimit, async (req, reply) => {
+    const q = query(req);
+    try {
+      if (q.error) throw new Error(String(q.error_description ?? q.error));
+      const userId = await finishSso(app, q.code ?? "", q.state ?? "", req.ip);
+      await startSession(req, reply, userId);
+      return reply.redirect("/");
+    } catch (err) {
+      return reply.redirect(`/login?sso_error=${encodeURIComponent((err as Error).message.slice(0, 200))}`);
+    }
+  });
+
   server.post("/api/auth/logout", async (req, reply) => {
-    const token = req.cookies[SESSION_COOKIE];
+    const token = req.cookies[sessionCookieName(app.config)];
     if (token) await destroySession(app, token);
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    reply.clearCookie(sessionCookieName(app.config), { path: "/" });
     return { ok: true };
   });
 
@@ -116,7 +178,8 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     const workspaces = await app.db.query("SELECT w.id, w.name, m.role FROM workspace_members m JOIN workspaces w ON w.id = m.workspace_id WHERE m.user_id = $1 ORDER BY w.name", [p.userId]);
     const ws = await app.db.one("SELECT id, name, settings FROM workspaces WHERE id = $1", [p.workspaceId]);
     const projects = await app.db.query("SELECT id, name, description FROM projects WHERE workspace_id = $1 ORDER BY created_at", [p.workspaceId]);
-    return { user, workspace: ws, role: p.role, workspaces, projects, csrfToken: req.sessionInfo?.csrf ?? null, brandName: app.config.brandName, actorType: p.actorType };
+    const mfa = await mfaStatus(app, p.userId!);
+    return { user, workspace: ws, role: p.role, workspaces, projects, csrfToken: req.sessionInfo?.csrf ?? null, brandName: app.config.brandName, actorType: p.actorType, totpEnabled: mfa.enabled, recoveryCodesLeft: mfa.recoveryCodesLeft, require2fa: (ws as { settings?: { require2fa?: boolean } } | undefined)?.settings?.require2fa === true };
   });
 
   server.post("/api/auth/switch-workspace", async (req) => {
@@ -131,7 +194,7 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     if (p.actorType !== "user") throw unauthorized("Session required.");
     const b = body(req);
     await changePassword(app, p.userId!, str(b.currentPassword) ?? "", str(b.newPassword) ?? "");
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    reply.clearCookie(sessionCookieName(app.config), { path: "/" });
     return { ok: true, message: "Password changed. Please sign in again." };
   });
 
@@ -149,6 +212,10 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     const settings = { ...(current?.settings ?? {}) };
     const s = (b.settings ?? {}) as Record<string, unknown>;
     if (s.aiMonthlyTokenBudget !== undefined) settings.aiMonthlyTokenBudget = Math.max(0, Math.floor(Number(s.aiMonthlyTokenBudget) || 0));
+    if (s.require2fa !== undefined) {
+      if (s.require2fa === true && !(await mfaStatus(app, p.userId!)).enabled) throw badRequest("Enable two-factor authentication on your own account before requiring it for the workspace.");
+      settings.require2fa = s.require2fa === true;
+    }
     if (s.executionRetentionDays !== undefined) settings.executionRetentionDays = Math.min(3650, Math.max(1, Math.floor(Number(s.executionRetentionDays) || 90)));
     await app.db.query("UPDATE workspaces SET name = $2, settings = $3 WHERE id = $1", [p.workspaceId, str(b.name)?.trim().slice(0, 200) || current?.name, settings]);
     await audit(app, p, { workspaceId: p.workspaceId, action: "workspace.update", details: { settings }, ip: p.ip });
@@ -388,7 +455,7 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
   server.get("/api/tables", async (req) => listTables(app, reader(req).workspaceId));
   server.post("/api/tables", async (req) => {
     const b = body(req);
-    return createTable(app, need(req), { name: str(b.name) ?? "", description: str(b.description), columns: b.columns, projectId: str(b.projectId), retentionDays: num(b.retentionDays) ?? null, minReadRole: str(b.minReadRole) as Role, minWriteRole: str(b.minWriteRole) as Role });
+    return createTable(app, need(req), { name: str(b.name) ?? "", description: str(b.description), columns: b.columns, projectId: str(b.projectId), retentionDays: num(b.retentionDays) ?? null, minReadRole: str(b.minReadRole) as Role, minWriteRole: str(b.minWriteRole) as Role, rowAccess: b.rowAccess === "own" ? "own" : "all" });
   });
   server.get("/api/tables/:id", async (req) => getTable(app, reader(req).workspaceId, params(req).id!));
   server.patch("/api/tables/:id", async (req) => {
@@ -400,6 +467,7 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
       retentionDays: b.retentionDays === null ? null : num(b.retentionDays),
       minReadRole: str(b.minReadRole) as Role | undefined,
       minWriteRole: str(b.minWriteRole) as Role | undefined,
+      rowAccess: b.rowAccess === "own" || b.rowAccess === "all" ? b.rowAccess : undefined,
     });
   });
   server.delete("/api/tables/:id", async (req) => {
@@ -428,6 +496,10 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     const p = need(req);
     authorize(p, "editor", "write");
     return updateRow(app, p, p.workspaceId, params(req).id!, params(req).rowId!, (body(req).data as Record<string, unknown>) ?? {}, { userId: p.userId });
+  });
+  server.put("/api/tables/:id/rows/:rowId/owner", async (req) => {
+    await assignRowOwner(app, need(req), params(req).id!, params(req).rowId!, str(body(req).ownerId) ?? null);
+    return { ok: true };
   });
   server.delete("/api/tables/:id/rows/:rowId", async (req) => {
     const p = need(req);
@@ -494,5 +566,5 @@ export async function registerApiRoutes(server: FastifyInstance, app: AppContext
     return app.db.query("SELECT id, direction, server_id, tool, actor, execution_id, status, duration_ms, error, created_at FROM mcp_tool_calls WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 200", [p.workspaceId]);
   });
 
-  server.get("/api/meta", async () => ({ brandName: app.config.brandName, registrationOpen: app.config.allowRegistration, version: "0.1.0" }));
+  server.get("/api/meta", async () => ({ brandName: app.config.brandName, registrationOpen: app.config.allowRegistration, version: "0.1.0", sso: app.config.oidc ? { label: app.config.oidc.label } : null }));
 }

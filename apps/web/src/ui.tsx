@@ -1,5 +1,5 @@
 import { X, Inbox, AlertTriangle } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes } from "react";
+import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from "react";
 import { ApiError } from "./api";
 
 // ---------------------------------------------------------------------------
@@ -211,12 +211,28 @@ export function Pagination({ total, limit, offset, onChange }: { total: number; 
   );
 }
 
+/**
+ * Labelled form field. When the child is a single input/select/textarea, the
+ * label is linked to it (htmlFor/id) and the help text via aria-describedby.
+ */
 export function Field({ label, help, children }: { label: string; help?: ReactNode; children: ReactNode }) {
+  const id = useId();
+  const helpId = `${id}-help`;
+  const single = isValidElement(children) && typeof children.type === "string" && ["input", "select", "textarea"].includes(children.type);
+  const props = single ? (children.props as { id?: string }) : null;
+  const inputId = props?.id ?? id;
+  const control = single
+    ? cloneElement(children as ReactElement<Record<string, unknown>>, { id: inputId, ...(help ? { "aria-describedby": helpId } : {}) })
+    : children;
   return (
     <div className="field">
-      <label>{label}</label>
-      {children}
-      {help && <div className="help">{help}</div>}
+      <label htmlFor={single ? inputId : undefined}>{label}</label>
+      {control}
+      {help && (
+        <div className="help" id={helpId}>
+          {help}
+        </div>
+      )}
     </div>
   );
 }

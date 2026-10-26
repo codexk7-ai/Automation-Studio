@@ -27,7 +27,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "rotate-key": "npm run rotate-key -w @automation-studio/server",
+    "test:postgres": "vitest run apps/server/test --exclude **/production.test.ts --exclude **/ollama.live.test.ts --no-file-parallelism",
+    "test:ai-live": "vitest run apps/server/test/ollama.live.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

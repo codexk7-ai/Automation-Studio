@@ -8,11 +8,16 @@ import type { AppContext } from "../context.ts";
 import { AppError, forbidden, StepError, unauthorized } from "../errors.ts";
 import type { Principal } from "../auth/principal.ts";
 import { firstWorkspaceFor, principalFromApiToken, resolveSession, roleIn } from "../services/accounts.ts";
+import { createPgRateLimitStore, recordHttp, renderMetrics } from "../production.ts";
+import { safeEqual } from "../security/crypto.ts";
 import { registerApiRoutes } from "./routes.ts";
 import { registerHookRoutes } from "./hooks.ts";
 import { registerMcpRoute } from "./mcp.ts";
 
-export const SESSION_COOKIE = "as_session";
+/** `__Host-` prefix (secure, host-only, path=/) whenever cookies are secure. */
+export function sessionCookieName(config: { secureCookies: boolean }): string {
+  return config.secureCookies ? "__Host-as_session" : "as_session";
+}
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -65,6 +70,8 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
     max: 900,
     timeWindow: "1 minute",
     keyGenerator: (req) => req.principal?.tokenId ?? req.principal?.userId ?? req.ip,
+    // Several API instances share limits through PostgreSQL; the embedded database is single-process.
+    ...(app.db.driver === "pg" ? { store: createPgRateLimitStore(app.db) as never } : {}),
     errorResponseBuilder: (_req, ctx) => ({ statusCode: 429, error: { code: "rate_limited", message: `Too many requests. Retry in ${Math.ceil(ctx.ttl / 1000)}s.` } }),
   });
 
@@ -84,13 +91,14 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
   // Authentication: bearer API token or session cookie (+ CSRF on unsafe methods).
   server.addHook("onRequest", async (req) => {
     const auth = req.headers.authorization;
-    if (auth?.startsWith("Bearer ")) {
+    // /metrics uses its own METRICS_TOKEN, not an API token.
+    if (auth?.startsWith("Bearer ") && req.url.split("?")[0] !== "/metrics") {
       const p = await principalFromApiToken(app, auth.slice(7).trim(), req.ip);
       if (!p) throw unauthorized("Invalid or expired API token.");
       req.principal = p;
       return;
     }
-    const token = req.cookies[SESSION_COOKIE];
+    const token = req.cookies[sessionCookieName(app.config)];
     if (!token) return;
     const s = await resolveSession(app, token);
     if (!s) return;
@@ -100,10 +108,35 @@ export async function buildServer(app: AppContext): Promise<FastifyInstance> {
     if (!role) return;
     req.sessionInfo = { ...s, workspaceId, token };
     req.principal = { actorType: "user", userId: s.userId, workspaceId, role, ip: req.ip };
+    // Workspace policy: members must enroll in 2FA before using anything but the auth endpoints.
+    if (req.url.startsWith("/api") && !req.url.startsWith("/api/auth/") && !req.url.startsWith("/api/meta")) {
+      const policy = await app.db.one<{ required: boolean; enrolled: boolean }>(
+        "SELECT COALESCE((w.settings->>'require2fa')::boolean, false) AS required, u.totp_enabled AS enrolled FROM workspaces w, users u WHERE w.id = $1 AND u.id = $2",
+        [workspaceId, s.userId],
+      );
+      if (policy?.required && !policy.enrolled) throw new AppError(403, "mfa_enrollment_required", "This workspace requires two-factor authentication. Set it up in your account settings.");
+    }
     if (!SAFE_METHODS.has(req.method) && req.url.startsWith("/api") && !req.url.startsWith("/api/auth/login") && !req.url.startsWith("/api/auth/register")) {
       const header = req.headers["x-csrf-token"];
       if (header !== s.csrf) throw forbidden("Missing or invalid CSRF token. Reload the page and try again.");
     }
+  });
+
+  // Access log (no query strings: they may carry tokens) and request metrics.
+  server.addHook("onResponse", async (req, reply) => {
+    const ms = reply.elapsedTime;
+    recordHttp(req.method, reply.statusCode, ms);
+    const path = req.url.split("?")[0]!;
+    if (path === "/api/health" || path === "/metrics") return;
+    app.log[reply.statusCode >= 500 ? "error" : "info"]("request", { method: req.method, path: path.replace(/\/hooks\/w\/[^/]+/, "/hooks/w/:key"), status: reply.statusCode, ms: Math.round(ms), actor: req.principal?.tokenId ?? req.principal?.userId ?? null });
+  });
+
+  // Prometheus metrics, only with METRICS_TOKEN (Authorization: Bearer <token>).
+  server.get("/metrics", { config: { rateLimit: false } }, async (req, reply) => {
+    const token = process.env.METRICS_TOKEN;
+    const given = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!token || !given || !safeEqual(given, token)) return reply.status(token ? 401 : 404).send("not found");
+    return reply.header("content-type", "text/plain; version=0.0.4").send(await renderMetrics(app));
   });
 
   server.setErrorHandler((err: Error & { statusCode?: number; validation?: unknown; code?: string }, req: FastifyRequest, reply: FastifyReply) => {

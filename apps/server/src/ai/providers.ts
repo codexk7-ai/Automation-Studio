@@ -86,8 +86,9 @@ class AnthropicProvider implements AiProvider {
     apiKey: string,
     readonly defaultModel: string,
   ) {
-    // All traffic goes through the SSRF-guarded fetch.
-    this.client = new Anthropic({ apiKey, fetch: app.fetch as unknown as typeof fetch, maxRetries: 1, timeout: 120_000 });
+    // Only the workspace's own key is used: never ambient ANTHROPIC_* environment credentials or base URLs
+    // of the server process. All traffic goes through the SSRF-guarded fetch.
+    this.client = new Anthropic({ apiKey, authToken: null, baseURL: "https://api.anthropic.com", fetch: app.fetch as unknown as typeof fetch, maxRetries: 1, timeout: 120_000 });
   }
 
   pricing(model: string) {

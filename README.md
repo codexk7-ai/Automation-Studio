@@ -24,13 +24,14 @@ npm start          # serves the UI and API on http://localhost:8787
 
 The default database is **PGlite**, a real PostgreSQL engine embedded in Node. Its data lives in `apps/server/.data/pglite`. To use a PostgreSQL server instead, set `DATABASE_URL`. With PostgreSQL you can run the API and any number of workers as separate processes (`WORKER_MODE=off` on the API, plus `npm run worker`).
 
-### Docker (PostgreSQL + API + worker)
+### Production (Docker: PostgreSQL + API + workers + HTTPS + backups)
 
 ```bash
-npm run setup                      # then add POSTGRES_PASSWORD=... to .env
+npm run setup      # then add DOMAIN, POSTGRES_PASSWORD, ACME_EMAIL, METRICS_TOKEN to .env
 docker compose up -d --build
-docker compose --profile ai up -d  # optional local Ollama
 ```
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for DNS, scaling, monitoring, backups and key rotation.
 
 ## What works locally without accounts
 
@@ -42,7 +43,7 @@ docker compose --profile ai up -d  # optional local Ollama
 | Data: tables, CSV, transforms | Works |
 | Generic HTTP requests (public URLs; private networks blocked) | Works |
 | Email | Captured in a local outbox, **not delivered**, until SMTP is configured |
-| AI steps | Mock test adapter (labelled `_mock: true`) until you connect Ollama (free, local) or a hosted provider |
+| AI steps | Mock test adapter (labelled `_mock: true`) until you connect Ollama (free, local; verified with llama3.2) or a hosted provider |
 | MCP server (`/mcp`) and external MCP client | Works |
 | Google Sheets / YouTube, WhatsApp, HubSpot, Slack, external PostgreSQL | Need your own accounts; simulated in test runs |
 
@@ -58,6 +59,10 @@ See [FEATURE_MATRIX.md](FEATURE_MATRIX.md) for the full, honest status.
 | `npm run migrate` | Apply database migrations (also run automatically at startup) |
 | `npm run seed` | Demo data (refuses to run in production) |
 | `npm test` | Unit and integration tests (Vitest) |
+| `npm run test:e2e` | Browser tests (Playwright; run `npx playwright install chromium` once) |
+| `npm run test:postgres` | Server suite against PostgreSQL (`TEST_DATABASE_URL`) |
+| `npm run test:ai-live` | Live AI tests against a local Ollama |
+| `npm run rotate-key` | Re-encrypt stored secrets with `NEW_ENCRYPTION_KEY` |
 | `npm run typecheck` | TypeScript checks for all packages |
 | `npm run mcp:stdio` | MCP over stdio (`AUTOMATION_STUDIO_TOKEN` required) |
 
@@ -70,4 +75,5 @@ See [FEATURE_MATRIX.md](FEATURE_MATRIX.md) for the full, honest status.
 - [BUILD_STATUS.md](BUILD_STATUS.md): current state, test results, next steps
 - [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md): connector setup, prerequisites and costs
 - [docs/MCP.md](docs/MCP.md): connecting MCP clients and external servers
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): production deployment, scaling, monitoring, backups, key rotation
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): configuration, backup/restore, troubleshooting

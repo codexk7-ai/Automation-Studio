@@ -1,34 +1,33 @@
 # Build status
 
-_Last updated: 2026-10-25_
+_Last updated: 2026-10-26_
 
 ## Current state
 
-All 12 phases are implemented. The application builds, starts with documented commands, and runs complete workflows end to end.
+All 12 phases are implemented, plus a production-hardening pass and a redesigned UI. Verification is below. Run `npm run typecheck`, `npm test` and `npm run test:e2e` to reproduce it.
 
-### Verification performed
+### Verified on this machine
 
-- `npm run typecheck`: all three packages (core, server, web) pass.
-- `npm test`: **38/38 tests pass** across 4 files: core expressions/validation (15), engine (13), API/MCP/tables (10).
-- `npm run build && npm start`: verified in a browser:
-  - sign-in, dashboard with real data, workflow editor (load, select, inspector, test run)
-  - public form → AI scoring (mock adapter) → table update → condition → draft → approval → email outbox → table update
-  - integrations, MCP, tables, executions, usage and settings pages render
-- Bugs found and fixed during verification:
-  - the `/mcp` UI route collided with the MCP API endpoint; the page moved to `/mcp-servers` and API path matching is now exact
-  - the horizontal layout made large workflows unreadable; the editor now flows top-to-bottom
-  - MCP tool policy errors surfaced as HTTP 500; they now return 403/422
-  - external MCP tool schemas (JSON Schema 2020-12) failed to compile; switched to Ajv 2020
-  - editing a connection could overwrite stored values with field defaults; edits now send only changed fields
+- **Typecheck, unit/integration tests and build** pass. Run the suites with `npm test`; `npm run test:postgres` runs the server suite against the real PostgreSQL wire protocol.
+- **Playwright E2E (Chromium, production build):**
+  - register → command palette → create workflow → add/configure a step → undo/redo → save → test run → publish → execution output
+  - template → public form → approval → email outbox
+  - theme and sidebar persistence
+- **Live AI:** Ollama 0.40 with `llama3.2:1b`; classify, extract and summarize all returned correct, schema-valid output (`npm run test:ai-live`).
+- **SMTP:** delivery to a real SMTP server (auth, headers, attachment).
+- **External PostgreSQL:** a real wire-protocol server.
+- **Security:** TOTP RFC vectors, the 2FA flow, lockout across password and 2FA attempts, workspace 2FA requirement, per-record permissions, and OIDC SSO with a mock IdP (real RS256).
+- **Production:** fail-fast config, `/api/ready`, `/metrics` auth, `__Host-` cookie, per-route PostgreSQL rate limits, and key rotation through the real CLI.
+- **UI redesign:** checked in a browser in light and dark themes, the editor, the command palette and the mobile drawer at 375px (no horizontal scroll).
 
 ### Not verified / known gaps
 
-- Live third-party services (SMTP delivery, Anthropic, Ollama, Google, WhatsApp, HubSpot, Slack, external PostgreSQL) were **not** exercised: no accounts or local runtimes were available (Ollama is not installed and Docker was not running). These adapters are written against the official APIs and pass typechecking.
-- `docker compose` was not run (Docker daemon not running).
-- No automated browser (Playwright) suite yet. Browser checks were manual.
-- In the sample test run of the lead template, the form trigger's sample data references a record ID (`row_1`) that doesn't exist, so the "Save score" step fails with "Record not found". This is expected with sample data. Run the workflow from the real form instead, or edit the test payload.
+- **`docker compose` + Caddy HTTPS were not run.** The Docker daemon would not start on this machine. Run them on your server (docs/DEPLOYMENT.md).
+- **The CI workflow** has not run on GitHub yet.
+- **Vendor services with real accounts were not exercised:** Anthropic, Google Sheets/YouTube, WhatsApp, HubSpot, Slack and a vendor OIDC IdP. They are tested against their documented API contracts with mock servers.
+- **No independent security review or penetration test.** See SECURITY.md for the limitations.
 
-See FEATURE_MATRIX.md for the per-feature status and SECURITY.md for security limitations.
+See FEATURE_MATRIX.md for the per-feature status.
 
 ## Layout
 
@@ -37,14 +36,15 @@ automation-studio/
   packages/core/        schema, expressions, validation, graph, redaction (+ tests)
   apps/server/          API, engine, integrations, AI, MCP, CLI (+ tests)
   apps/web/             React UI + React Flow editor
-  docs/                 integrations, MCP, operations
-  Dockerfile, docker-compose.yml, .env.example
+  e2e/                  Playwright browser tests
+  deploy/               Caddyfile, backup script
+  docs/                 deployment, integrations, MCP, operations
+  Dockerfile, docker-compose.yml, .env.example, .github/workflows/ci.yml
 ```
 
 ## Next steps (in priority order)
 
-1. Add a Playwright E2E test for create → edit → test-run → publish → webhook.
-2. Run the live adapters against sandbox accounts and fix discrepancies.
-3. Install Ollama, connect it, and verify the AI steps against a real local model.
-4. Editor improvements: undo/redo and auto-layout.
-5. Record-level permissions, SSO/2FA, key rotation.
+1. Deploy with `docker compose` on a server with a domain (docs/DEPLOYMENT.md) and test a backup restore.
+2. Push to GitHub so CI runs.
+3. Connect real vendor sandbox accounts (Google, WhatsApp, HubSpot, Slack, Anthropic, your OIDC IdP) and run each connector once.
+4. Commission an independent security review before handling sensitive customer data.

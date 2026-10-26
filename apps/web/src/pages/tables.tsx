@@ -1,6 +1,6 @@
 import { ArrowLeft, Database, Download, Plus, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import { del, get, patch, post, qs } from "../api";
+import { del, get, patch, post, put, qs } from "../api";
 import { Link, useRouter } from "../router";
 import { useSession } from "../session";
 import { Button, Confirm, Empty, ErrorBox, Field, Loading, Modal, Pagination, errorMessage, timeAgo, useAsync, useToast } from "../ui";
@@ -20,6 +20,7 @@ interface TableRow {
   columns: Column[];
   row_count?: number;
   retention_days: number | null;
+  row_access?: "all" | "own";
   updated_at: string;
 }
 
@@ -85,6 +86,7 @@ export function TablesPage() {
 function TableModal({ existing, onClose, onSaved }: { existing?: TableRow; onClose: () => void; onSaved: (t: TableRow) => void }) {
   const [name, setName] = useState(existing?.name ?? "");
   const [retention, setRetention] = useState(existing?.retention_days ? String(existing.retention_days) : "");
+  const [rowAccess, setRowAccess] = useState<"all" | "own">(existing?.row_access ?? "all");
   const [columns, setColumns] = useState<Column[]>(existing?.columns ?? [{ key: "", name: "Name", type: "text", required: true }]);
   const [error, setError] = useState<unknown>(null);
   return (
@@ -99,7 +101,7 @@ function TableModal({ existing, onClose, onSaved }: { existing?: TableRow; onClo
             variant="primary"
             onClick={async () => {
               try {
-                const body = { name, columns: columns.map((c) => ({ ...c, key: c.key || undefined, options: c.type === "select" ? c.options : undefined })), retentionDays: retention ? Number(retention) : null };
+                const body = { name, columns: columns.map((c) => ({ ...c, key: c.key || undefined, options: c.type === "select" ? c.options : undefined })), retentionDays: retention ? Number(retention) : null, rowAccess };
                 onSaved(existing ? await patch(`/api/tables/${existing.id}`, body) : await post("/api/tables", body));
               } catch (err) {
                 setError(err);
@@ -120,6 +122,12 @@ function TableModal({ existing, onClose, onSaved }: { existing?: TableRow; onClo
           <input className="input" type="number" min={1} value={retention} onChange={(e) => setRetention(e.target.value)} />
         </Field>
       </div>
+      <Field label="Record access" help="With 'own records', viewers and editors only see and change records they own; admins see everything and can reassign owners.">
+        <select className="input" value={rowAccess} onChange={(e) => setRowAccess(e.target.value as "all" | "own")}>
+          <option value="all">Everyone with table access sees all records</option>
+          <option value="own">Members see only their own records</option>
+        </select>
+      </Field>
       <div className="label">Columns</div>
       {columns.map((c, i) => (
         <div key={i} className="row" style={{ flexWrap: "nowrap" }}>
@@ -175,8 +183,9 @@ export function TableDetailPage({ id }: { id: string }) {
     const t = setTimeout(() => (setDebounced(search), setOffset(0)), 250);
     return () => clearTimeout(t);
   }, [search]);
+  const members = useAsync(() => (can("admin") ? get<Array<{ id: string; name: string; email: string }>>("/api/members") : Promise.resolve([])));
   const data = useAsync(
-    () => get<{ table: TableRow; rows: Array<{ id: string; data: Record<string, unknown>; created_at: string }>; total: number; limit: number; offset: number }>(`/api/tables/${id}/rows${qs({ search: debounced, limit: 50, offset, sort: sort.key, direction: sort.dir })}`),
+    () => get<{ table: TableRow; rows: Array<{ id: string; data: Record<string, unknown>; owner_id: string | null; created_at: string }>; total: number; limit: number; offset: number }>(`/api/tables/${id}/rows${qs({ search: debounced, limit: 50, offset, sort: sort.key, direction: sort.dir })}`),
     [id, debounced, offset, sort.key, sort.dir],
   );
   if (data.error) return <div className="page"><ErrorBox error={data.error} onRetry={data.reload} /></div>;
@@ -241,6 +250,7 @@ export function TableDetailPage({ id }: { id: string }) {
                         {c.name} {sort.key === c.key ? (sort.dir === "asc" ? "↑" : "↓") : ""}
                       </th>
                     ))}
+                    {t.row_access === "own" && can("admin") && <th>Owner</th>}
                     <th style={{ cursor: "pointer" }} onClick={() => toggleSort("created_at")}>
                       Created {sort.key === "created_at" ? (sort.dir === "asc" ? "↑" : "↓") : ""}
                     </th>
@@ -253,6 +263,31 @@ export function TableDetailPage({ id }: { id: string }) {
                       {t.columns.map((c) => (
                         <td key={c.key}>{cellText(r.data[c.key], c.type)}</td>
                       ))}
+                      {t.row_access === "own" && can("admin") && (
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <select
+                            className="input"
+                            style={{ height: 28, minWidth: 140 }}
+                            aria-label="Record owner"
+                            value={r.owner_id ?? ""}
+                            onChange={async (e) => {
+                              try {
+                                await put(`/api/tables/${id}/rows/${r.id}/owner`, { ownerId: e.target.value || null });
+                                await data.reload();
+                              } catch (err) {
+                                toast(errorMessage(err), "error");
+                              }
+                            }}
+                          >
+                            <option value="">Unassigned (admins only)</option>
+                            {members.data?.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      )}
                       <td className="faint">{timeAgo(r.created_at)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         {can("editor") && (

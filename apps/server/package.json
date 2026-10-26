@@ -13,7 +13,9 @@
     "seed": "tsx src/cli/seed.ts",
     "mcp:stdio": "tsx src/cli/mcp-stdio.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "migrate:prod": "node dist/migrate.js"
+    "migrate:prod": "node dist/migrate.js",
+    "rotate-key": "tsx src/cli/rotate-key.ts",
+    "rotate-key:prod": "node dist/rotate-key.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
@@ -34,10 +36,15 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite-socket": "^0.2.14",
+    "@types/mailparser": "^3.9.0",
     "@types/nodemailer": "^8.0.2",
     "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.15.6",
+    "@types/smtp-server": "^3.5.13",
     "esbuild": "^0.28.2",
+    "mailparser": "^3.12.4",
+    "smtp-server": "^3.21.1",
     "tsx": "^4.23.15"
   }
 }

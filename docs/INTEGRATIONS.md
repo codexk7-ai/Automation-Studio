@@ -35,7 +35,7 @@ Add an **AI model provider** connection.
    - Unverified OAuth apps only work for listed test users, and sensitive scopes may require Google's verification review.
    - YouTube quota is 10,000 units per day by default: list calls cost about 1 unit, metadata updates about 50. Raising it requires an audit.
    - Caption downloads only work for videos the connected account can edit.
-   - **Video upload/publishing is not implemented.** Uploads from unverified API projects are forced to private.
+   - **Video upload** (`YouTube: upload video`) uses the resumable upload protocol. The file is downloaded from a URL (up to `YOUTUBE_MAX_UPLOAD_MB`, default 512 MB, held in memory). Privacy defaults to private, scheduled publishing is supported, and the "made for kids" declaration is required. An upload costs about 1,600 quota units. Videos uploaded by unverified API projects are locked to private until your project passes Google's API audit. A failed upload restarts from the beginning on retry; there is no partial-resume across retries.
 
 ## WhatsApp Business Platform (Cloud API)
 

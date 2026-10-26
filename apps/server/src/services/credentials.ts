@@ -1,4 +1,4 @@
-import type { FieldSpec } from "@automation-studio/core";
+import { isSensitiveKey, type FieldSpec } from "@automation-studio/core";
 import type { AppContext } from "../context.ts";
 import { badRequest, notFound } from "../errors.ts";
 import type { LoadedCredential } from "../integrations/types.ts";
@@ -167,13 +167,22 @@ export async function testCredential(app: AppContext, p: Principal, id: string):
   }
 }
 
-/** All string secret values of a credential, used for log redaction. */
-export function secretValues(data: Record<string, unknown>): string[] {
+/**
+ * Secret values of a credential, used for log/output redaction: fields the
+ * credential type marks sensitive, fields not declared by the type (OAuth
+ * tokens) and keys that look secret. Non-secret settings such as a provider
+ * name or host are not redacted.
+ */
+export function secretValues(data: Record<string, unknown>, fields: FieldSpec[] = []): string[] {
+  const declared = new Map(fields.map((f) => [f.key, f]));
   const out: string[] = [];
   const visit = (v: unknown) => {
     if (typeof v === "string" && v.length >= 6) out.push(v);
     else if (v && typeof v === "object") Object.values(v).forEach(visit);
   };
-  visit(data);
+  for (const [key, value] of Object.entries(data)) {
+    const field = declared.get(key);
+    if (!field || field.sensitive || isSensitiveKey(key)) visit(value);
+  }
   return out;
 }

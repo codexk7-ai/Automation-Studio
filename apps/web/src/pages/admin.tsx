@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 import { del, get, patch, post, qs } from "../api";
 import { useSession } from "../session";
+import { TwoFactorCard } from "./two-factor";
 import { Button, Confirm, Empty, ErrorBox, Field, Loading, Modal, Pagination, errorMessage, formatDate, timeAgo, useAsync, useToast } from "../ui";
 
 export function UsagePage() {
@@ -401,7 +402,7 @@ function TokenModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
 export function SettingsPage() {
   const { me, can, refresh } = useSession();
   const toast = useToast();
-  const ws = useAsync(() => get<{ id: string; name: string; settings: { aiMonthlyTokenBudget?: number; executionRetentionDays?: number } }>("/api/workspace"));
+  const ws = useAsync(() => get<{ id: string; name: string; settings: { aiMonthlyTokenBudget?: number; executionRetentionDays?: number; require2fa?: boolean } }>("/api/workspace"));
   const [offset, setOffset] = useState(0);
   const audit = useAsync(() => (can("admin") ? get<{ items: Array<{ id: number; actor_type: string; actor_id: string | null; action: string; resource_type: string | null; resource_id: string | null; ip: string | null; created_at: string }>; total: number }>(`/api/audit${qs({ limit: 25, offset })}`) : Promise.resolve(null)), [offset]);
   const [pw, setPw] = useState({ currentPassword: "", newPassword: "" });
@@ -428,6 +429,8 @@ export function SettingsPage() {
             }
           }}
         />
+        <div className="stack">
+        <TwoFactorCard />
         <div className="card card-pad stack">
           <h2>Your account</h2>
           <div className="muted">
@@ -452,6 +455,7 @@ export function SettingsPage() {
           >
             Change password
           </Button>
+        </div>
         </div>
       </div>
       {can("admin") && (
@@ -498,7 +502,8 @@ export function SettingsPage() {
   );
 }
 
-function WorkspaceSettings({ initial, disabled, onSave }: { initial: { name: string; settings: { aiMonthlyTokenBudget?: number; executionRetentionDays?: number } }; disabled: boolean; onSave: (b: unknown) => Promise<void> }) {
+function WorkspaceSettings({ initial, disabled, onSave }: { initial: { name: string; settings: { aiMonthlyTokenBudget?: number; executionRetentionDays?: number; require2fa?: boolean } }; disabled: boolean; onSave: (b: unknown) => Promise<void> }) {
+  const [require2fa, setRequire2fa] = useState(initial.settings.require2fa === true);
   const [name, setName] = useState(initial.name);
   const [budget, setBudget] = useState(String(initial.settings.aiMonthlyTokenBudget ?? 0));
   const [retention, setRetention] = useState(String(initial.settings.executionRetentionDays ?? 90));
@@ -514,7 +519,10 @@ function WorkspaceSettings({ initial, disabled, onSave }: { initial: { name: str
       <Field label="Keep execution history (days)">
         <input className="input" type="number" min={1} disabled={disabled} value={retention} onChange={(e) => setRetention(e.target.value)} />
       </Field>
-      {!disabled && <Button variant="primary" onClick={() => onSave({ name, settings: { aiMonthlyTokenBudget: Number(budget), executionRetentionDays: Number(retention) } })}>Save</Button>}
+      <label className="checkbox">
+        <input type="checkbox" disabled={disabled} checked={require2fa} onChange={(e) => setRequire2fa(e.target.checked)} /> Require two-factor authentication for all members
+      </label>
+      {!disabled && <Button variant="primary" onClick={() => onSave({ name, settings: { aiMonthlyTokenBudget: Number(budget), executionRetentionDays: Number(retention), require2fa } })}>Save</Button>}
     </div>
   );
 }

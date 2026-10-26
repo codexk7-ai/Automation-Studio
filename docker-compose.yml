@@ -1,53 +1,102 @@
-# Production-like local stack: PostgreSQL + API + separate worker (+ optional Ollama).
-# Usage: set ENCRYPTION_KEY and POSTGRES_PASSWORD in .env, then `docker compose up -d --build`.
+# Production stack: PostgreSQL + API (control plane) + worker(s) (execution plane)
+# + Caddy (automatic HTTPS) + nightly backups (+ optional Ollama).
+#
+#   1. npm run setup                      # creates .env with ENCRYPTION_KEY
+#   2. add to .env: DOMAIN=automate.example.com  POSTGRES_PASSWORD=<strong password>
+#                   ACME_EMAIL=you@example.com     METRICS_TOKEN=<random>
+#   3. point DNS for DOMAIN at this server (ports 80/443 open)
+#   4. docker compose up -d --build
+#
+# Local trial without a domain: DOMAIN=localhost (Caddy uses its internal CA).
+x-app: &app
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment: &app-env
+    NODE_ENV: production
+    DATABASE_URL: postgres://automation:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/automation
+    PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env}
+    SECURE_COOKIES: "true"
+    TRUST_PROXY: "true"
+    HOST: 0.0.0.0
+    OUTBOUND_ALLOWLIST: ollama:11434
+
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: automation
       POSTGRES_USER: automation
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U automation -d automation"]
       interval: 5s
-      retries: 10
+      retries: 20
 
   api:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file: .env
+    <<: *app
     environment:
-      DATABASE_URL: postgres://automation:${POSTGRES_PASSWORD}@postgres:5432/automation
+      <<: *app-env
       WORKER_MODE: "off"
-      HOST: 0.0.0.0
-      OUTBOUND_ALLOWLIST: ollama:11434
-    ports:
-      - "8787:8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      retries: 5
 
   worker:
-    build: .
+    <<: *app
+    command: ["node", "dist/worker.js"]
+    # Scale horizontally: docker compose up -d --scale worker=3
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: .env
     environment:
-      DATABASE_URL: postgres://automation:${POSTGRES_PASSWORD}@postgres:5432/automation
-      OUTBOUND_ALLOWLIST: ollama:11434
-    command: ["node", "dist/worker.js"]
-    deploy:
-      replicas: 1
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - ./deploy/backup.sh:/backup.sh:ro
+    entrypoint: ["/bin/sh", "/backup.sh"]
 
-  # Optional local model runtime: `docker compose --profile ai up -d`, then `docker compose exec ollama ollama pull llama3.2`
+  # Optional local model runtime: docker compose --profile ai up -d
+  # then: docker compose exec ollama ollama pull llama3.2
   ollama:
     image: ollama/ollama:latest
+    restart: unless-stopped
     profiles: ["ai"]
     volumes:
       - ollama:/root/.ollama
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
   ollama:

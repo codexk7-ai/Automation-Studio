@@ -75,6 +75,12 @@ export class SecretBox {
     return Buffer.concat([decipher.update(Buffer.from(ct, "base64url")), decipher.final()]).toString("utf8");
   }
 
+  /** HMAC-SHA256 under a purpose-specific key derived from the encryption key. */
+  mac(purpose: string, value: string): string {
+    const derived = createHmac("sha256", this.key).update(`purpose:${purpose}`).digest();
+    return createHmac("sha256", derived).update(value).digest("hex");
+  }
+
   encryptJson(value: unknown, aad = ""): string {
     return this.encrypt(JSON.stringify(value), aad);
   }

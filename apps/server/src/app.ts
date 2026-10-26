@@ -2,6 +2,7 @@ import { loadConfig, type AppConfig } from "./config.ts";
 import type { AppContext } from "./context.ts";
 import { createDb, type Db } from "./db/index.ts";
 import { migrate } from "./db/migrate.ts";
+import { checkProductionConfig } from "./production.ts";
 import { Worker } from "./engine/worker.ts";
 import { createRegistry } from "./integrations/index.ts";
 import { createLogger } from "./logger.ts";
@@ -21,6 +22,9 @@ export interface App {
 export async function createApp(overrides: Partial<AppConfig> = {}, opts: { db?: Db; runMigrations?: boolean } = {}): Promise<App> {
   const config = loadConfig(overrides);
   const log = createLogger(config.logLevel, { service: "automation-studio" });
+  const check = checkProductionConfig(config);
+  for (const w of check.warnings) log.warn(`config: ${w}`);
+  if (check.errors.length) throw new Error(`Unsafe production configuration:\n- ${check.errors.join("\n- ")}\nFix these (see docs/DEPLOYMENT.md) or set ALLOW_UNSAFE_PRODUCTION_CONFIG=true for a temporary staging test.`);
   let key = config.encryptionKey;
   if (!key) {
     if (config.env === "production") throw new Error("ENCRYPTION_KEY is required in production. Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");

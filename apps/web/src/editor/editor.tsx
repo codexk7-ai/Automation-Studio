@@ -13,14 +13,14 @@ import {
   type Node,
   type NodeChange,
 } from "@xyflow/react";
-import { AlertTriangle, ArrowLeft, Copy, Download, FlaskConical, History, Pause, Play, Rocket, Save, Search, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Copy, Download, FlaskConical, History, LayoutGrid, Pause, Play, Redo2, Rocket, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, get, post, put } from "../api";
 import { Link } from "../router";
 import { nodeDef, useSession } from "../session";
 import { Button, ErrorBox, JsonView, Loading, Modal, StatusBadge, errorMessage, formatDate, useToast } from "../ui";
 import { FieldInput, type Inserter } from "./fields";
-import { ancestors, branchesOf, iconFor, newNodeId, nodeTypes, type FlowNodeData } from "./nodes";
+import { ancestors, autoLayout, branchesOf, iconFor, newNodeId, nodeTypes, type FlowNodeData } from "./nodes";
 
 
 interface WorkflowResponse {
@@ -142,26 +142,80 @@ function EditorInner({ id }: { id: string }) {
     [def, selectedEdge, statuses],
   );
 
-  const update = useCallback((fn: (d: WorkflowDefinition) => WorkflowDefinition) => {
-    setDef((d) => (d ? fn(structuredClone(d)) : d));
-    setDirty(true);
+  // Undo/redo history of definition snapshots. Rapid edits (typing) within 600 ms coalesce into one step.
+  const defRef = useRef<WorkflowDefinition | null>(null);
+  defRef.current = def;
+  const history = useRef<{ past: WorkflowDefinition[]; future: WorkflowDefinition[]; lastPush: number }>({ past: [], future: [], lastPush: 0 });
+  const dragStart = useRef<WorkflowDefinition | null>(null);
+  const [, setHistoryVersion] = useState(0);
+  const pushHistory = useCallback((snapshot: WorkflowDefinition | null, coalesce = true) => {
+    if (!snapshot) return;
+    const h = history.current;
+    const now = Date.now();
+    if (!coalesce || now - h.lastPush > 600) {
+      h.past.push(structuredClone(snapshot));
+      if (h.past.length > 100) h.past.shift();
+    }
+    h.lastPush = now;
+    h.future = [];
+    setHistoryVersion((v) => v + 1);
   }, []);
+  const undo = useCallback(() => {
+    const h = history.current;
+    const prev = h.past.pop();
+    if (!prev || !defRef.current) return;
+    h.future.push(structuredClone(defRef.current));
+    h.lastPush = 0;
+    setDef(prev);
+    setDirty(true);
+    setHistoryVersion((v) => v + 1);
+  }, []);
+  const redo = useCallback(() => {
+    const h = history.current;
+    const next = h.future.pop();
+    if (!next || !defRef.current) return;
+    h.past.push(structuredClone(defRef.current));
+    h.lastPush = 0;
+    setDef(next);
+    setDirty(true);
+    setHistoryVersion((v) => v + 1);
+  }, []);
+
+  const update = useCallback(
+    (fn: (d: WorkflowDefinition) => WorkflowDefinition, coalesce = true) => {
+      pushHistory(defRef.current, coalesce);
+      setDef((d) => (d ? fn(structuredClone(d)) : d));
+      setDirty(true);
+    },
+    [pushHistory],
+  );
+
+  const tidyUp = useCallback(() => {
+    if (!catalog) return;
+    update((d) => autoLayout(d, (n) => branchesOf(nodeDef(catalog, n.type), n)), false);
+    setTimeout(() => rf.fitView({ padding: 0.2, maxZoom: 1, duration: 300 }), 50);
+  }, [update, catalog, rf]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       setRfNodes((nds) => applyNodeChanges(changes, nds));
       for (const c of changes) {
         if (c.type === "position" && c.position && editable) {
+          if (c.dragging && !dragStart.current) dragStart.current = defRef.current ? structuredClone(defRef.current) : null;
           const pos = { x: Math.round(c.position.x), y: Math.round(c.position.y) };
           setDef((d) => (d ? { ...d, nodes: d.nodes.map((n) => (n.id === c.id ? { ...n, position: pos } : n)) } : d));
-          if (c.dragging === false) setDirty(true);
+          if (c.dragging === false) {
+            pushHistory(dragStart.current, false);
+            dragStart.current = null;
+            setDirty(true);
+          }
         } else if (c.type === "select" && c.selected) {
           setSelected(c.id);
           setSelectedEdge(null);
         }
       }
     },
-    [editable],
+    [editable, pushHistory],
   );
 
   const removeNodes = useCallback(
@@ -267,7 +321,16 @@ function EditorInner({ id }: { id: string }) {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      const mod = e.ctrlKey || e.metaKey;
+      // Inside text fields the browser's own undo applies.
+      if (!typing && mod && editable && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (!typing && mod && editable && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+      } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (editable) void save();
       } else if (!typing && (e.key === "Delete" || e.key === "Backspace") && editable) {
@@ -280,7 +343,7 @@ function EditorInner({ id }: { id: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [save, selected, selectedEdge, def, removeNodes, duplicateNode, update, editable]);
+  }, [save, selected, selectedEdge, def, removeNodes, duplicateNode, update, editable, undo, redo]);
 
   const pollExecution = useCallback(
     async (executionId: string) => {
@@ -397,6 +460,19 @@ function EditorInner({ id }: { id: string }) {
             )}
             <Button size="sm" variant="primary" onClick={() => setModal("publish")} disabled={validation.errors.length > 0} title={validation.errors.length ? "Fix validation errors first" : "Publish a new version"}>
               <Rocket size={14} /> Publish
+            </Button>
+          </>
+        )}
+        {editable && (
+          <>
+            <Button size="sm" variant="ghost" onClick={undo} disabled={!history.current.past.length} title="Undo (Ctrl+Z)" aria-label="Undo">
+              <Undo2 size={14} />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={redo} disabled={!history.current.future.length} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+              <Redo2 size={14} />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={tidyUp} title="Tidy up layout" aria-label="Tidy up layout">
+              <LayoutGrid size={14} />
             </Button>
           </>
         )}

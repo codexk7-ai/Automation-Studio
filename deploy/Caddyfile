@@ -1,0 +1,30 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Webhooks and MCP may stream; disable buffering for them.
+	@stream path /mcp /hooks/*
+	reverse_proxy @stream api:8787 {
+		flush_interval -1
+	}
+
+	reverse_proxy api:8787 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Prometheus metrics are for your monitoring network only.
+	@metrics path /metrics
+	respond @metrics 404
+
+	request_body {
+		max_size 12MB
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

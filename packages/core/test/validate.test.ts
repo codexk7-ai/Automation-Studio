@@ -126,3 +126,34 @@ describe("redaction", () => {
     expect(out.tokens).toBe(5);
   });
 });
+
+describe("autoLayout", () => {
+  it("ranks nodes top-to-bottom by longest path and orders branches left-to-right", async () => {
+    const { autoLayout } = await import("../src/layout.ts");
+    const def = {
+      schemaVersion: 1 as const,
+      settings: { timeoutMs: 1000, maxStepExecutions: 10, dedupeWindowSeconds: 0 },
+      nodes: [
+        { id: "t", type: "trigger.manual", name: "T", config: {}, onError: "fail" as const, disabled: false },
+        { id: "c", type: "logic.condition", name: "C", config: {}, onError: "fail" as const, disabled: false },
+        { id: "no", type: "x", name: "No", config: {}, onError: "fail" as const, disabled: false },
+        { id: "yes", type: "x", name: "Yes", config: {}, onError: "fail" as const, disabled: false },
+        { id: "end", type: "x", name: "End", config: {}, onError: "fail" as const, disabled: false },
+      ],
+      edges: [
+        { id: "1", source: "t", target: "c" },
+        { id: "2", source: "c", target: "yes", branch: "true" },
+        { id: "3", source: "c", target: "no", branch: "false" },
+        { id: "4", source: "yes", target: "end" },
+        { id: "5", source: "t", target: "end" },
+      ],
+    };
+    const out = autoLayout(def, (n) => (n.type === "logic.condition" ? ["true", "false"] : []));
+    const pos = Object.fromEntries(out.nodes.map((n) => [n.id, n.position!]));
+    expect(pos.t!.y).toBeLessThan(pos.c!.y);
+    expect(pos.yes!.y).toBe(pos.no!.y);
+    expect(pos.yes!.x).toBeLessThan(pos.no!.x); // "true" branch left of "false"
+    expect(pos.end!.y).toBeGreaterThan(pos.yes!.y); // longest path, not shortest
+    expect(out.edges).toEqual(def.edges); // layout never changes execution structure
+  });
+});

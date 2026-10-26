@@ -52,6 +52,8 @@ export interface AppConfig {
   smtp: { host: string; port: number; user: string; pass: string; from: string; secure: boolean } | null;
   defaultEmailFrom: string;
   google: { clientId: string; clientSecret: string } | null;
+  /** OpenID Connect single sign-on (any compliant IdP: Google Workspace, Entra ID, Okta, Keycloak, Authentik…). */
+  oidc: { issuer: string; clientId: string; clientSecret: string; allowedDomains: string[]; autoCreate: boolean; label: string } | null;
   webDistDir: string;
   logLevel: string;
   corsOrigins: string[];
@@ -97,6 +99,17 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       : null,
     defaultEmailFrom: process.env.EMAIL_FROM || "Automation Studio <no-reply@localhost>",
     google: process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET ? { clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET } : null,
+    oidc:
+      process.env.OIDC_ISSUER && process.env.OIDC_CLIENT_ID
+        ? {
+            issuer: process.env.OIDC_ISSUER.replace(/\/$/, ""),
+            clientId: process.env.OIDC_CLIENT_ID,
+            clientSecret: process.env.OIDC_CLIENT_SECRET ?? "",
+            allowedDomains: (process.env.OIDC_ALLOWED_DOMAINS ?? "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean),
+            autoCreate: bool(process.env.OIDC_AUTO_CREATE_USERS, false),
+            label: process.env.OIDC_BUTTON_LABEL || "Sign in with SSO",
+          }
+        : null,
     webDistDir: process.env.WEB_DIST_DIR || resolve(process.cwd(), "../web/dist"),
     logLevel: process.env.LOG_LEVEL || (env === "test" ? "silent" : "info"),
     corsOrigins: (process.env.CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),

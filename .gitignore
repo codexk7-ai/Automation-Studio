@@ -10,3 +10,4 @@ playwright-report/
 .vite/
 backups/
 .vercel/
+*.local.txt
